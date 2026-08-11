@@ -1,5 +1,36 @@
 # Midnight Rolling POC
 
+## Quick start
+
+Prerequisites: Foundry, Node.js and pnpm.
+
+Clone the repository, initialize its pinned dependencies and run the Solidity tests:
+
+```bash
+git clone --recurse-submodules https://github.com/morpho-org/midnight-pocs.git
+cd midnight-pocs/rolling
+cp .env.example .env
+forge test
+```
+
+To run the interactive walkthrough, start the local Base fork from the `rolling` directory:
+
+```bash
+cd ui
+pnpm install --frozen-lockfile
+./anvil.sh
+```
+
+Then open a second terminal:
+
+```bash
+cd midnight-pocs/rolling/ui
+pnpm dev
+```
+
+Open `http://127.0.0.1:5111` and select one of the four rolling examples. Run `pnpm verify` from `rolling/ui`
+to execute all four walkthrough lifecycles without the browser.
+
 A proof of concept for moving a Morpho Midnight loan from one fixed maturity to a later maturity. It separates
 two different rolling problems:
 
