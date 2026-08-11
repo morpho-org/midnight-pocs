@@ -1,8 +1,6 @@
 # Midnight POCs
 
-Focused, non-production proofs of concept for integrations built on Morpho Midnight.
-
-Each POC lives in its own directory with an independent README, dependencies, tests and local-run instructions.
+Proof of concepts for integrations built on Morpho Midnight. Each POC lives in its own directory with an independent README, dependencies, tests and local-run instructions.
 The examples are intentionally narrow: they demonstrate specific protocol mechanics without defining a complete
 production product.
 
