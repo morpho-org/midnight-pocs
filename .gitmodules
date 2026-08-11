@@ -1,0 +1,6 @@
+[submodule "rolling/lib/forge-std"]
+	path = rolling/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
+[submodule "rolling/lib/midnight"]
+	path = rolling/lib/midnight
+	url = https://github.com/morpho-org/midnight
