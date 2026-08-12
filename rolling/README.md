@@ -1,12 +1,45 @@
 # Midnight Rolling POC
 
+## Quick start
+
+Prerequisites: Foundry, Node.js and pnpm.
+
+Clone the repository, initialize its pinned dependencies and run the Solidity tests:
+
+```bash
+git clone --recurse-submodules https://github.com/morpho-org/midnight-pocs.git
+cd midnight-pocs/rolling
+cp .env.example .env
+forge test
+```
+
+To run the interactive walkthrough, start the local Base fork from the `rolling` directory:
+
+```bash
+cd ui
+pnpm install --frozen-lockfile
+./anvil.sh
+```
+
+Then open a second terminal:
+
+```bash
+cd midnight-pocs/rolling/ui
+pnpm dev
+```
+
+Open `http://127.0.0.1:5111` and select one of the four rolling examples. Run `pnpm verify` from `rolling/ui`
+to execute all four walkthrough lifecycles without the browser.
+
 A proof of concept for moving a Morpho Midnight loan from one fixed maturity to a later maturity. It separates
 two different rolling problems:
 
-1. **General borrower rolling:** the borrower refinances into any valid offer on the new market. The old and new
-   lenders may be different.
-2. **Two-party / KYC capital rolling:** the same approved lender and borrower remain in the facility, so the
-   lender must bridge the period before its old capital becomes withdrawable.
+1. **Borrower-oriented rolling:** a borrower with an existing Midnight loan has already found a valid lending
+   offer on another, later-maturity market and wants to refinance into it in one transaction. The replacement
+   offer may come from the original lender or a different lender.
+2. **Two-party / KYC capital rolling:** both the borrower and the same lender move their settled positions from
+   the existing Midnight market into a later-maturity market. `FlashRollLender` bridges the lender's committed
+   capital atomically, so the lender does not need to keep additional assets idle for the roll.
 
 Each individual roll call performs its debt repayment and collateral migration through Midnight callbacks. A
 call reverts if its replacement debt, old repayment or collateral movement cannot all complete. The tranche
@@ -16,19 +49,21 @@ option is intentionally a sequence of atomic partial rolls rather than one atomi
 
 | Example | Lender relationship | Source of roll liquidity | Execution | Primary trade-off |
 | --- | --- | --- | --- | --- |
-| General refinance | Lender A may be replaced by Lender B | A valid offer from the new lender | One singleton roll; Lender A's repaid credit becomes withdrawable | The borrower must find a suitable later-maturity offer before the old loan matures |
+| General refinance | Lender A may be replaced by Lender B | A valid offer the borrower has found on the new market | One singleton transaction repays the old debt and moves the collateral into the new market | The borrower must find a suitable later-maturity offer before the old loan matures |
 | Cash treasury | The same lender funds both loans | Almost one additional advance held by that lender | One full roll, followed by withdrawal of the repaid old credit | Simplest same-lender flow, but requires substantial standby capital |
 | Tranches | The same lender funds both loans | A smaller reusable liquidity buffer | Repeated partial rolls and old-credit withdrawals | Less standby capital, but more operations and partial-roll exposure |
-| Flash loan | The same lender funds both loans | Temporary external liquidity borrowed atomically | One full roll within nested Midnight and Morpho Blue callbacks | No additional idle principal, but adds adapter and flash-liquidity dependencies |
+| Flash loan | The same lender moves its capital into the replacement market while the borrower moves its debt and collateral | Temporary external liquidity borrowed atomically | `FlashRollLender` completes both sides of the migration within nested Midnight and Morpho Blue callbacks | No additional idle lender assets, but adds adapter and flash-liquidity dependencies |
 
 The general refinance is a borrower-side mechanism: a new lender's offer supplies the proceeds that repay the
 old lender. The other three examples solve the separate lender-side liquidity problem that arises when the same
 lender wants to remain invested across consecutive maturities.
 
-## General borrower rolling
+## Borrower-oriented rolling
 
 `MidnightRoller` is a permissionless singleton deployed once per chain and shared by every user. It does not
-assume that the lender on the old loan is also the lender on the replacement loan.
+source lender-side liquidity or assume that the lender on the old loan also funds the replacement loan. Its
+starting point is a borrower that already has an outstanding loan and has found a valid offer on another,
+later-maturity Midnight market.
 
 ```text
 Lender B funds the new maturity
@@ -44,10 +79,11 @@ Lender B funds the new maturity
 Borrower now owes Lender B at the later maturity
 ```
 
-The borrower calls `roll(params)` with a valid lender offer for the new market. The singleton calls
+The borrower calls `roll(params)` with that valid lender offer. In one transaction, the singleton calls
 `Midnight.take()` with the borrower as the taker and itself as the proceeds receiver and callback. Inside
 `onSell()`, it repays the old debt and moves the collateral on behalf of the borrower. The old lender is not an
-input to the roll; Midnight makes that lender's old-market credit withdrawable when the debt is repaid.
+input to the roll and does not need to participate in it; Midnight makes that lender's old-market credit
+withdrawable when the debt is repaid.
 
 The replacement offer is discounted, so a new loan with the same face value would not produce enough cash to
 repay the old face. The singleton capitalizes that gap. It calculates the smallest `newUnits` whose proceeds
@@ -144,7 +180,9 @@ through a more complex bundled contract, but tranching does not remove the addit
 
 ### Flash-funded option
 
-`FlashRollLender` uses Morpho Blue to bridge the full principal inside one transaction:
+`FlashRollLender` is specifically for moving both sides of a settled same-lender position to a new Midnight
+market. The borrower moves its debt and collateral while the lender recycles its credit into the replacement
+market. It uses Morpho Blue to bridge the lender's full principal inside one transaction:
 
 1. The capital owner ratifies the replacement Midnight offer.
 2. The borrower operator approves the exact roll terms for one use.
@@ -154,8 +192,10 @@ through a more complex bundled contract, but tranching does not remove the addit
 6. The adapter withdraws the released old lender credit.
 7. Morpho Blue pulls back the flash principal.
 
-The lender supplies the initial advance that remains invested in Midnight, but does not keep another principal
-amount idle for each roll. Morpho Blue must have sufficient liquidity when the roll executes.
+The lender's original capital remains invested throughout the lifecycle, but the lender does not need to keep
+another principal amount idle for each roll. Morpho Blue must have sufficient liquidity when the roll executes.
+This is different from `MidnightRoller`, which only performs the borrower-side refinance after a valid new-market
+offer already exists and does not coordinate migration of the old lender's capital into that market.
 
 ## Interest treatment
 
