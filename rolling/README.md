@@ -37,8 +37,9 @@ two different rolling problems:
 1. **Borrower-oriented rolling:** a borrower with an existing Midnight loan has already found a valid lending
    offer on another, later-maturity market and wants to refinance into it in one transaction. The replacement
    offer may come from the original lender or a different lender.
-2. **Two-party / KYC capital rolling:** the same approved lender and borrower remain in the facility, so the
-   lender must bridge the period before its old capital becomes withdrawable.
+2. **Two-party / KYC capital rolling:** both the borrower and the same lender move their settled positions from
+   the existing Midnight market into a later-maturity market. `FlashRollLender` bridges the lender's committed
+   capital atomically, so the lender does not need to keep additional assets idle for the roll.
 
 Each individual roll call performs its debt repayment and collateral migration through Midnight callbacks. A
 call reverts if its replacement debt, old repayment or collateral movement cannot all complete. The tranche
@@ -51,7 +52,7 @@ option is intentionally a sequence of atomic partial rolls rather than one atomi
 | General refinance | Lender A may be replaced by Lender B | A valid offer the borrower has found on the new market | One singleton transaction repays the old debt and moves the collateral into the new market | The borrower must find a suitable later-maturity offer before the old loan matures |
 | Cash treasury | The same lender funds both loans | Almost one additional advance held by that lender | One full roll, followed by withdrawal of the repaid old credit | Simplest same-lender flow, but requires substantial standby capital |
 | Tranches | The same lender funds both loans | A smaller reusable liquidity buffer | Repeated partial rolls and old-credit withdrawals | Less standby capital, but more operations and partial-roll exposure |
-| Flash loan | The same lender funds both loans | Temporary external liquidity borrowed atomically | One full roll within nested Midnight and Morpho Blue callbacks | No additional idle principal, but adds adapter and flash-liquidity dependencies |
+| Flash loan | The same lender moves its capital into the replacement market while the borrower moves its debt and collateral | Temporary external liquidity borrowed atomically | `FlashRollLender` completes both sides of the migration within nested Midnight and Morpho Blue callbacks | No additional idle lender assets, but adds adapter and flash-liquidity dependencies |
 
 The general refinance is a borrower-side mechanism: a new lender's offer supplies the proceeds that repay the
 old lender. The other three examples solve the separate lender-side liquidity problem that arises when the same
@@ -179,7 +180,9 @@ through a more complex bundled contract, but tranching does not remove the addit
 
 ### Flash-funded option
 
-`FlashRollLender` uses Morpho Blue to bridge the full principal inside one transaction:
+`FlashRollLender` is specifically for moving both sides of a settled same-lender position to a new Midnight
+market. The borrower moves its debt and collateral while the lender recycles its credit into the replacement
+market. It uses Morpho Blue to bridge the lender's full principal inside one transaction:
 
 1. The capital owner ratifies the replacement Midnight offer.
 2. The borrower operator approves the exact roll terms for one use.
@@ -189,8 +192,10 @@ through a more complex bundled contract, but tranching does not remove the addit
 6. The adapter withdraws the released old lender credit.
 7. Morpho Blue pulls back the flash principal.
 
-The lender supplies the initial advance that remains invested in Midnight, but does not keep another principal
-amount idle for each roll. Morpho Blue must have sufficient liquidity when the roll executes.
+The lender's original capital remains invested throughout the lifecycle, but the lender does not need to keep
+another principal amount idle for each roll. Morpho Blue must have sufficient liquidity when the roll executes.
+This is different from `MidnightRoller`, which only performs the borrower-side refinance after a valid new-market
+offer already exists and does not coordinate migration of the old lender's capital into that market.
 
 ## Interest treatment
 
