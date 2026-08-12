@@ -10,8 +10,11 @@ Clone the repository, initialize its pinned dependencies and run the Solidity te
 git clone --recurse-submodules https://github.com/morpho-org/midnight-pocs.git
 cd midnight-pocs/rolling
 cp .env.example .env
-forge test
+forge test --evm-version osaka
 ```
+
+Midnight uses the Osaka-only `CLZ` opcode, so the tests must run with the Osaka EVM version. Osaka is also set
+in `foundry.toml`; the explicit flag keeps this copy-paste command consistent across Foundry environments.
 
 To run the interactive walkthrough, start the local Base fork from the `rolling` directory:
 
@@ -228,9 +231,12 @@ collateral and oracle are intentionally simple local mocks.
 ```bash
 git submodule update --init --recursive
 cp .env.example .env
-forge test
+forge test --evm-version osaka
 forge build --sizes
 ```
+
+Midnight uses the Osaka-only `CLZ` opcode. The repository sets `evm_version = "osaka"` in `foundry.toml`, and
+the explicit test flag avoids activation ambiguity across Foundry environments.
 
 The deterministic test block is `49,358,285`. Remove `FORK_BLOCK` to run against the current Base tip.
 
