@@ -3,6 +3,7 @@ pragma solidity 0.8.36;
 import {IERC20} from "./ERC20.sol";
 import {AssetRegistry} from "./AssetRegistry.sol";
 import {Offer} from "./Midnight.sol";
+import {MockReceivable} from "./test/mocks/MockReceivable.sol";
 //fix this  
 
 
@@ -14,10 +15,10 @@ contract WarehouseAccount{
     }
 
     IERC20 public immutable loanToken;
+    ReceivableToken public immutable receivableToken;
     address public immutable operator;
     address public immutable juniorProvider;
     AssetRegistry public assetRegistry;
-
 
     modifier onlyOperator{
         require(msg.sender == operator);
@@ -35,16 +36,38 @@ contract WarehouseAccount{
         operator = _operator;
         juniorProvider = junior;
     }
-
-    public function juniorDeposit(uint256 amount, address token) onlyJunior{
+    
+    function juniorDeposit(uint256 amount, address token) public onlyJunior {
         require(inAssetRegistry(token), "Not a supported token");
 
         bool success = IERC20(token).transferFrom(msg.sender, address(this), amount);
         require(success, "Transfer Failed);
+    }
+
+    function inAssetRegistry(address token) private {
+        reuqire(assetRegistry.inRegistry(token));
+    }
+
+    function borrow() public onlyOperator{
 
     }
 
-    private function inAssetRegistry(address token){
+    function repay() public onlyOperator{
 
     }
+
+
+    //
+    // Read Only Function
+    //
+
+    function checkDeficiency() public {
+
+    }
+
+    function sweepCash() {
+
+    }
+
+
 }
