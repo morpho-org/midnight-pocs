@@ -1,0 +1,22 @@
+{
+  "name": "blue-callback-limit-order",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.32.1",
+  "scripts": {
+    "anvil": "./anvil.sh",
+    "test": "tsx src/callback-flow.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@morpho-org/midnight-sdk": "1.3.0",
+    "@morpho-org/morpho-ts": "2.10.0",
+    "viem": "2.55.10"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2"
+  }
+}
