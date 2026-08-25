@@ -4,13 +4,16 @@ import {IERC20} from "./ERC20.sol";
 import {AssetRegistry} from "./AssetRegistry.sol";
 import {Offer} from "./Midnight.sol";
 import {MockReceivable} from "./test/mocks/MockReceivable.sol";
-//fix this  
 
+//fix this  
+interface Midnight{
+    Offer offer 
+    // forget how to do this but read about it.
+}
 
 contract WarehouseAccount{
     enum State{
         Active,
-        Deficiency,
         RunOff
     }
 
@@ -38,18 +41,19 @@ contract WarehouseAccount{
     }
     
     function juniorDeposit(uint256 amount, address token) public onlyJunior {
-        require(inAssetRegistry(token), "Not a supported token");
-
-        bool success = IERC20(token).transferFrom(msg.sender, address(this), amount);
-        require(success, "Transfer Failed);
+        require(amount > 0, "Amount must be positive");
+        bool success = loanToken.transferFrom(msg.sender, address(this), amount);
+        require(success, "Transfer Failed");
     }
 
     function inAssetRegistry(address token) private {
         reuqire(assetRegistry.inRegistry(token));
     }
 
-    function borrow() public onlyOperator{
-
+    function borrow(Offer offer) public onlyOperator{
+        // Approe colalteral via midnight bundles
+        // AUthroize midngiht bundles
+        // execute borrow bundle
     }
 
     function repay() public onlyOperator{
