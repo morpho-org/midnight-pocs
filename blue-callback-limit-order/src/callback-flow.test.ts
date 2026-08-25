@@ -9,10 +9,12 @@ import {
   Tree,
   midnightAbi,
 } from '@morpho-org/midnight-sdk'
+import { blueAbi } from '@morpho-org/blue-sdk-viem'
 import {
   createPublicClient,
   createWalletClient,
   encodeAbiParameters,
+  erc20Abi,
   formatUnits,
   http,
   keccak256,
@@ -26,12 +28,7 @@ import {
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { base } from 'viem/chains'
-import {
-  blueAbi,
-  blueBuyCallbackAbi,
-  blueBuyCallbackFactoryAbi,
-  erc20Abi,
-} from './abis.js'
+import { blueBuyCallbackAbi, blueBuyCallbackFactoryAbi } from './abis.js'
 import {
   BLUE,
   BLUE_MARKET,
