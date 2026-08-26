@@ -3,20 +3,19 @@ import {
   zeroAddress,
   type Account,
   type Address,
-  type Chain,
   type Hex,
   type PublicClient,
   type Transport,
   type WalletClient,
 } from 'viem'
+import { base } from 'viem/chains'
 
-export interface SimulateTakeParameters<
-  chain extends Chain,
-  publicTransport extends Transport,
-  account extends Account,
-> {
-  publicClient: PublicClient<publicTransport, chain>
-  account: account
+type BasePublicClient = PublicClient<Transport, typeof base>
+type BaseWalletClient = WalletClient<Transport, typeof base, Account>
+
+export interface SimulateTakeParameters {
+  publicClient: BasePublicClient
+  account: Account
   offer: OfferStruct
   ratifierData: Hex
   buyerAssets: bigint
@@ -24,12 +23,11 @@ export interface SimulateTakeParameters<
   onBehalf?: Address
 }
 
-/** Quotes and simulates a partial fill without changing state. */
-export async function simulateTake<
-  chain extends Chain,
-  publicTransport extends Transport,
-  account extends Account,
->({
+export type TakeOfferParameters = SimulateTakeParameters & {
+  walletClient: BaseWalletClient
+}
+
+export async function simulateTake({
   publicClient,
   account,
   offer,
@@ -37,12 +35,13 @@ export async function simulateTake<
   buyerAssets,
   receiver = account.address,
   onBehalf = account.address,
-}: SimulateTakeParameters<chain, publicTransport, account>) {
+}: SimulateTakeParameters) {
   if (buyerAssets <= 0n) throw new Error('buyerAssets must be positive')
 
-  const block = await publicClient.getBlock()
-  const timeToMaturity = BigInt(offer.market.maturity) - block.timestamp
+  const { timestamp } = await publicClient.getBlock()
+  const timeToMaturity = BigInt(offer.market.maturity) - timestamp
   if (timeToMaturity <= 0n) throw new Error('market has matured')
+
   const settlementFee = await publicClient.readContract({
     address: offer.market.midnight,
     abi: midnightAbi,
@@ -61,19 +60,8 @@ export async function simulateTake<
   return { ...simulation, request: { ...simulation.request, gas: (gas * 12n) / 10n }, units }
 }
 
-/** Simulates and submits one partial fill of a signed Midnight offer. */
-export async function takeOffer<
-  chain extends Chain,
-  publicTransport extends Transport,
-  walletTransport extends Transport,
-  account extends Account,
->(
-  parameters: SimulateTakeParameters<chain, publicTransport, account> & {
-    walletClient: WalletClient<walletTransport, chain, account>
-  },
-) {
-  const { walletClient, ...simulateParameters } = parameters
-  const simulation = await simulateTake(simulateParameters)
+export async function takeOffer({ walletClient, ...parameters }: TakeOfferParameters) {
+  const simulation = await simulateTake(parameters)
   const hash = await walletClient.writeContract(simulation.request as never)
   const receipt = await parameters.publicClient.waitForTransactionReceipt({ hash })
   if (receipt.status !== 'success') throw new Error(`take reverted: ${hash}`)
