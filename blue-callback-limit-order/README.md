@@ -2,7 +2,7 @@
 
 A small TypeScript implementation of a callback-backed Midnight lend offer. It shows a lender keeping USDC supplied to Morpho Blue until a borrower fills a signed fixed-rate offer.
 
-The example separates reusable maker and taker functions from a deterministic Anvil test. The test uses deployed Morpho Blue, Midnight, `BlueBuyCallbackFactory`, and ratifier contracts on a Base fork, but it neither publishes an offer nor sends a transaction to Base.
+The example separates reusable maker and taker functions. The test uses deployed Morpho Blue, Midnight, `BlueBuyCallbackFactory`, and ratifier contracts on a Base fork, but it neither publishes an offer nor sends a transaction to Base.
 
 ## Implementation
 
