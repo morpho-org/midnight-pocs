@@ -56,13 +56,13 @@ export async function simulateTake({
     functionName: 'take',
     args: [offer, ratifierData, units, receiver, onBehalf, zeroAddress, '0x'],
   })
-  const gas = await publicClient.estimateContractGas(simulation.request as never)
+  const gas = await publicClient.estimateContractGas(simulation.request)
   return { ...simulation, request: { ...simulation.request, gas: (gas * 12n) / 10n }, units }
 }
 
 export async function takeOffer({ walletClient, ...parameters }: TakeOfferParameters) {
   const simulation = await simulateTake(parameters)
-  const hash = await walletClient.writeContract(simulation.request as never)
+  const hash = await walletClient.writeContract(simulation.request)
   const receipt = await parameters.publicClient.waitForTransactionReceipt({ hash })
   if (receipt.status !== 'success') throw new Error(`take reverted: ${hash}`)
   return { ...simulation, hash, receipt }
