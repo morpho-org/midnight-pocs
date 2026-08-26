@@ -4,6 +4,8 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "noImplicitReturns": true,
     "noUnusedLocals": true,
     "noEmit": true,
     "skipLibCheck": true,
