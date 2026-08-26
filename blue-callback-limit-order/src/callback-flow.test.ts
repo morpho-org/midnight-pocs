@@ -38,7 +38,7 @@ import {
   RPC_URL,
   USDC,
 } from './constants.js'
-import { prepareBlueCallbackPosition, signBlueCallbackOffer } from './maker.js'
+import { createMaker } from './maker.js'
 import { simulateTake, takeOffer } from './taker.js'
 
 const WAD = 10n ** 18n
@@ -141,7 +141,7 @@ async function main() {
 
   const block = await publicClient.getBlock()
   const tick = sixPercentTick(block.timestamp)
-  const callback = await prepareBlueCallbackPosition({
+  const lender = createMaker({
     publicClient,
     walletClient: wallet(maker),
     account: maker,
@@ -150,16 +150,14 @@ async function main() {
     ratifier: ECRECOVER_RATIFIER,
     blueMarket: BLUE_MARKET,
     midnightMarket: MIDNIGHT_MARKET,
-    assets: OFFER_SIZE,
-    salt: SALT,
   })
-  const { callbackData, offer, ratifierData } = await signBlueCallbackOffer({
-    walletClient: wallet(maker),
-    account: maker,
+
+  const callback = await lender.createCallback(SALT)
+  await lender.approveBlue(OFFER_SIZE)
+  await lender.supplyBlue(callback, OFFER_SIZE)
+  await lender.authorizeRatifier()
+  const { callbackData, offer, ratifierData } = await lender.signOffer({
     callback,
-    ratifier: ECRECOVER_RATIFIER,
-    blueMarket: BLUE_MARKET,
-    midnightMarket: MIDNIGHT_MARKET,
     assets: OFFER_SIZE,
     tick,
     expiry: BigInt(MIDNIGHT_MARKET.maturity) - 1n,

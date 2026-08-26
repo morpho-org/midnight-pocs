@@ -6,8 +6,12 @@ The example separates reusable maker and taker functions from a deterministic An
 
 ## Implementation
 
-- [`prepareBlueCallbackPosition()`](src/maker.ts) resolves or creates the maker's callback, checks USDC allowance, supplies USDC to Blue for the callback and authorizes the ratifier.
-- [`signBlueCallbackOffer()`](src/maker.ts) constructs and signs an offer with `@morpho-org/midnight-sdk` without changing onchain state, so it can safely be called again when repricing.
+- [`createMaker()`](src/maker.ts) binds the clients, account, contracts and markets once, then exposes the maker steps below.
+- `createCallback()` deploys the maker's callback through the factory when it does not already exist.
+- `approveBlue()` approves Blue to transfer the requested USDC when the existing allowance is insufficient.
+- `supplyBlue()` supplies USDC to Blue with the callback as the position owner.
+- `authorizeRatifier()` authorizes the Midnight ratifier when needed.
+- `signOffer()` constructs and signs an offer with `@morpho-org/midnight-sdk` without changing onchain state.
 - [`simulateTake()`](src/taker.ts) reads the current settlement fee, quotes the requested partial fill and simulates `take()` without changing state.
 - [`takeOffer()`](src/taker.ts) calls `simulateTake()` and submits its exact request.
 - [`src/callback-flow.test.ts`](src/callback-flow.test.ts) contains only fork setup, test funding, borrower collateral and assertions around those reusable functions.
