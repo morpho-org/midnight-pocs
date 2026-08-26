@@ -18,7 +18,6 @@ import {
   type Abi,
   type Account,
   type Address,
-  type Hash,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { base } from 'viem/chains'
@@ -39,7 +38,7 @@ import {
   RPC_URL,
   USDC,
 } from './constants.js'
-import { makeBlueCallbackOffer } from './maker.js'
+import { prepareBlueCallbackPosition, signBlueCallbackOffer } from './maker.js'
 import { simulateTake, takeOffer } from './taker.js'
 
 const WAD = 10n ** 18n
@@ -142,7 +141,7 @@ async function main() {
 
   const block = await publicClient.getBlock()
   const tick = sixPercentTick(block.timestamp)
-  const { callback, callbackData, offer, ratifierData } = await makeBlueCallbackOffer({
+  const callback = await prepareBlueCallbackPosition({
     publicClient,
     walletClient: wallet(maker),
     account: maker,
@@ -152,9 +151,18 @@ async function main() {
     blueMarket: BLUE_MARKET,
     midnightMarket: MIDNIGHT_MARKET,
     assets: OFFER_SIZE,
+    salt: SALT,
+  })
+  const { callbackData, offer, ratifierData } = await signBlueCallbackOffer({
+    walletClient: wallet(maker),
+    account: maker,
+    callback,
+    ratifier: ECRECOVER_RATIFIER,
+    blueMarket: BLUE_MARKET,
+    midnightMarket: MIDNIGHT_MARKET,
+    assets: OFFER_SIZE,
     tick,
     expiry: BigInt(MIDNIGHT_MARKET.maturity) - 1n,
-    salt: SALT,
   })
   assert.notEqual(callback, zeroAddress)
   assert.equal(

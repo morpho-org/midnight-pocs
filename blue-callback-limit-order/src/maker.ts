@@ -31,7 +31,7 @@ export interface BlueMarketParams {
   readonly lltv: bigint
 }
 
-export interface MakeBlueCallbackOfferParameters<
+export interface PrepareBlueCallbackPositionParameters<
   chain extends Chain,
   publicTransport extends Transport,
   walletTransport extends Transport,
@@ -46,17 +46,29 @@ export interface MakeBlueCallbackOfferParameters<
   blueMarket: BlueMarketParams
   midnightMarket: IMarketParams
   assets: bigint
-  tick: bigint
-  expiry: bigint
   salt: Hash
 }
 
-export interface SignedBlueCallbackOffer {
+export interface SignBlueCallbackOfferParameters<
+  chain extends Chain,
+  walletTransport extends Transport,
+  account extends Account,
+> {
+  walletClient: WalletClient<walletTransport, chain, account>
+  account: account
   callback: Address
+  ratifier: Address
+  blueMarket: BlueMarketParams
+  midnightMarket: IMarketParams
+  assets: bigint
+  tick: bigint
+  expiry: bigint
+}
+
+export interface SignedBlueCallbackOffer {
   callbackData: Hex
   offer: OfferStruct
   ratifierData: Hex
-  transactionHashes: readonly Hash[]
 }
 
 const encodeBlueMarket = (market: BlueMarketParams) =>
@@ -84,8 +96,8 @@ async function confirm<transport extends Transport, chain extends Chain>(
   if (receipt.status !== 'success') throw new Error(`transaction reverted: ${hash}`)
 }
 
-/** Supplies the maker's loan tokens to Blue and signs a callback-backed Midnight offer. */
-export async function makeBlueCallbackOffer<
+/** Creates the callback when needed and supplies the maker's loan tokens to its Blue position. */
+export async function prepareBlueCallbackPosition<
   chain extends Chain,
   publicTransport extends Transport,
   walletTransport extends Transport,
@@ -100,16 +112,13 @@ export async function makeBlueCallbackOffer<
   blueMarket,
   midnightMarket,
   assets,
-  tick,
-  expiry,
   salt,
-}: MakeBlueCallbackOfferParameters<chain, publicTransport, walletTransport, account>): Promise<SignedBlueCallbackOffer> {
+}: PrepareBlueCallbackPositionParameters<chain, publicTransport, walletTransport, account>): Promise<Address> {
   if (assets <= 0n) throw new Error('assets must be positive')
   if (blueMarket.loanToken.toLowerCase() !== midnightMarket.loanToken.toLowerCase()) {
     throw new Error('Blue and Midnight loan tokens must match')
   }
 
-  const transactionHashes: Hash[] = []
   let callback = await publicClient.readContract({
     address: callbackFactory,
     abi: blueBuyCallbackFactoryAbi,
@@ -126,7 +135,6 @@ export async function makeBlueCallbackOffer<
       args: [account.address, salt],
     })
     const hash = await walletClient.writeContract(request as never)
-    transactionHashes.push(hash)
     await confirm(publicClient, hash)
     callback = await publicClient.readContract({
       address: callbackFactory,
@@ -135,6 +143,7 @@ export async function makeBlueCallbackOffer<
       args: [account.address, salt],
     })
   }
+  if (callback === zeroAddress) throw new Error('callback creation failed')
 
   const allowance = await publicClient.readContract({
     address: blueMarket.loanToken,
@@ -151,7 +160,6 @@ export async function makeBlueCallbackOffer<
       args: [blue, assets],
     })
     const hash = await walletClient.writeContract(request as never)
-    transactionHashes.push(hash)
     await confirm(publicClient, hash)
   }
 
@@ -163,7 +171,6 @@ export async function makeBlueCallbackOffer<
     args: [blueMarket, assets, 0n, callback, '0x'],
   })
   const supplyHash = await walletClient.writeContract(supply as never)
-  transactionHashes.push(supplyHash)
   await confirm(publicClient, supplyHash)
 
   const isAuthorized = await publicClient.readContract({
@@ -181,8 +188,32 @@ export async function makeBlueCallbackOffer<
       args: [ratifier, true, account.address],
     })
     const hash = await walletClient.writeContract(request as never)
-    transactionHashes.push(hash)
     await confirm(publicClient, hash)
+  }
+
+  return callback
+}
+
+/** Signs a callback-backed Midnight offer without changing onchain state. */
+export async function signBlueCallbackOffer<
+  chain extends Chain,
+  walletTransport extends Transport,
+  account extends Account,
+>({
+  walletClient,
+  account,
+  callback,
+  ratifier,
+  blueMarket,
+  midnightMarket,
+  assets,
+  tick,
+  expiry,
+}: SignBlueCallbackOfferParameters<chain, walletTransport, account>): Promise<SignedBlueCallbackOffer> {
+  if (assets <= 0n) throw new Error('assets must be positive')
+  if (callback === zeroAddress) throw new Error('callback is required')
+  if (blueMarket.loanToken.toLowerCase() !== midnightMarket.loanToken.toLowerCase()) {
+    throw new Error('Blue and Midnight loan tokens must match')
   }
 
   const callbackData = encodeBlueMarket(blueMarket)
@@ -205,10 +236,8 @@ export async function makeBlueCallbackOffer<
   if (!signed) throw new Error('ratifier returned no signed offer')
 
   return {
-    callback,
     callbackData,
     offer: OfferUtils.toStruct({ offer: signed.offer }),
     ratifierData: signed.ratifierData,
-    transactionHashes,
   }
 }
