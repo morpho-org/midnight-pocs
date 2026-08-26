@@ -1,8 +1,16 @@
 # Blue callback limit order
 
-A deterministic TypeScript integration test for a callback-backed Midnight lend offer. It shows a lender keeping USDC supplied to Morpho Blue until a borrower fills a signed fixed-rate offer.
+A small TypeScript implementation of a callback-backed Midnight lend offer. It shows a lender keeping USDC supplied to Morpho Blue until a borrower fills a signed fixed-rate offer.
 
-The entire flow runs locally against an Anvil fork of Base. It uses the deployed Morpho Blue, Midnight, `BlueBuyCallbackFactory`, and ratifier contracts, but it neither publishes an offer nor sends a transaction to Base.
+The example separates reusable maker and taker functions from a deterministic Anvil test. The test uses deployed Morpho Blue, Midnight, `BlueBuyCallbackFactory`, and ratifier contracts on a Base fork, but it neither publishes an offer nor sends a transaction to Base.
+
+## Implementation
+
+- [`src/maker.ts`](src/maker.ts) accepts standard Viem clients and a funded maker account. It resolves or creates the maker's callback, checks and sets USDC allowance, supplies USDC to Blue for the callback, authorizes the ratifier and signs the Midnight offer with `@morpho-org/midnight-sdk`.
+- [`src/taker.ts`](src/taker.ts) quotes a requested partial fill, reads the current settlement fee, simulates `take()` and optionally submits that exact simulated request.
+- [`src/callback-flow.test.ts`](src/callback-flow.test.ts) contains only fork setup, test funding, borrower collateral and assertions around those reusable functions.
+
+Neither reusable function contains Anvil impersonation or test balance manipulation.
 
 ## What it proves
 
@@ -71,7 +79,7 @@ pnpm typecheck
 
 ## API boundary
 
-This test deliberately does not use the live Midnight API. A signed Midnight offer is an offchain object and can be passed directly to `Midnight.take`; API publication and discovery are not prerequisites for settlement. Keeping the core test local avoids dependence on a changing public order book and avoids publishing test offers.
+This example deliberately does not use the live Midnight API. A signed Midnight offer is an offchain object and can be passed directly to `Midnight.take`; API publication and discovery are not prerequisites for settlement. Keeping the core test local avoids dependence on a changing public order book and avoids publishing test offers.
 
 An API smoke test can be added separately for market discovery, mempool payload validation and quote retrieval without weakening this deterministic callback settlement test.
 
