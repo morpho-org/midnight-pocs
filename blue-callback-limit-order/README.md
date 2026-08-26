@@ -6,8 +6,10 @@ The example separates reusable maker and taker functions from a deterministic An
 
 ## Implementation
 
-- [`src/maker.ts`](src/maker.ts) accepts standard Viem clients and a funded maker account. It resolves or creates the maker's callback, checks and sets USDC allowance, supplies USDC to Blue for the callback, authorizes the ratifier and signs the Midnight offer with `@morpho-org/midnight-sdk`.
-- [`src/taker.ts`](src/taker.ts) quotes a requested partial fill, reads the current settlement fee, simulates `take()` and optionally submits that exact simulated request.
+- [`prepareBlueCallbackPosition()`](src/maker.ts) resolves or creates the maker's callback, checks USDC allowance, supplies USDC to Blue for the callback and authorizes the ratifier.
+- [`signBlueCallbackOffer()`](src/maker.ts) constructs and signs an offer with `@morpho-org/midnight-sdk` without changing onchain state, so it can safely be called again when repricing.
+- [`simulateTake()`](src/taker.ts) reads the current settlement fee, quotes the requested partial fill and simulates `take()` without changing state.
+- [`takeOffer()`](src/taker.ts) calls `simulateTake()` and submits its exact request.
 - [`src/callback-flow.test.ts`](src/callback-flow.test.ts) contains only fork setup, test funding, borrower collateral and assertions around those reusable functions.
 
 Neither reusable function contains Anvil impersonation or test balance manipulation.
