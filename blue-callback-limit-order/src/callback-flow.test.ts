@@ -1,19 +1,13 @@
 import assert from 'node:assert/strict'
 import {
-  EcrecoverRatifierUtils,
   MarketUtils,
-  Offer,
-  OfferUtils,
-  TakeAmountsLib,
   TickLib,
-  Tree,
   midnightAbi,
 } from '@morpho-org/midnight-sdk'
 import { blueAbi } from '@morpho-org/blue-sdk-viem'
 import {
   createPublicClient,
   createWalletClient,
-  encodeAbiParameters,
   erc20Abi,
   formatUnits,
   http,
@@ -28,7 +22,7 @@ import {
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { base } from 'viem/chains'
-import { blueBuyCallbackAbi, blueBuyCallbackFactoryAbi } from './abis.js'
+import { blueBuyCallbackAbi } from './abis.js'
 import {
   BLUE,
   BLUE_MARKET,
@@ -45,6 +39,8 @@ import {
   RPC_URL,
   USDC,
 } from './constants.js'
+import { makeBlueCallbackOffer } from './maker.js'
+import { simulateTake, takeOffer } from './taker.js'
 
 const WAD = 10n ** 18n
 const YEAR = 365n * 24n * 60n * 60n
@@ -137,89 +133,34 @@ async function main() {
 
   await Promise.all([setEthBalance(maker.address), setEthBalance(borrower.address), setEthBalance(BLUE)])
 
-  let callback = await publicClient.readContract({
-    address: CALLBACK_FACTORY,
-    abi: blueBuyCallbackFactoryAbi,
-    functionName: 'callbackOf',
-    args: [maker.address, SALT],
-  })
-  assert.equal(callback, zeroAddress, 'test requires a fresh Anvil fork')
-  await send(maker, {
-    address: CALLBACK_FACTORY,
-    abi: blueBuyCallbackFactoryAbi,
-    functionName: 'createBlueBuyCallback',
-    args: [maker.address, SALT],
-  })
-  callback = await publicClient.readContract({
-    address: CALLBACK_FACTORY,
-    abi: blueBuyCallbackFactoryAbi,
-    functionName: 'callbackOf',
-    args: [maker.address, SALT],
-  })
-  assert.notEqual(callback, zeroAddress)
-  assert.equal(
-    (await publicClient.readContract({ address: callback, abi: blueBuyCallbackAbi, functionName: 'OWNER' })).toLowerCase(),
-    maker.address.toLowerCase(),
-  )
-
   await send(BLUE, {
     address: USDC,
     abi: erc20Abi,
     functionName: 'transfer',
     args: [maker.address, OFFER_SIZE],
   })
-  await send(maker, {
-    address: USDC,
-    abi: erc20Abi,
-    functionName: 'approve',
-    args: [BLUE, OFFER_SIZE],
-  })
-  await send(maker, {
-    address: BLUE,
-    abi: blueAbi,
-    functionName: 'supply',
-    args: [BLUE_MARKET, OFFER_SIZE, 0n, callback, '0x'],
-  })
-  await send(maker, {
-    address: MIDNIGHT,
-    abi: midnightAbi,
-    functionName: 'setIsAuthorized',
-    args: [ECRECOVER_RATIFIER, true, maker.address],
-  })
-
-  const callbackData = encodeAbiParameters(
-    [
-      {
-        type: 'tuple',
-        components: [
-          { name: 'loanToken', type: 'address' },
-          { name: 'collateralToken', type: 'address' },
-          { name: 'oracle', type: 'address' },
-          { name: 'irm', type: 'address' },
-          { name: 'lltv', type: 'uint256' },
-        ],
-      },
-    ],
-    [BLUE_MARKET],
-  )
 
   const block = await publicClient.getBlock()
   const tick = sixPercentTick(block.timestamp)
-  const offer = Offer.create({
-    market: MIDNIGHT_MARKET,
-    buy: true,
-    maker: maker.address,
+  const { callback, callbackData, offer, ratifierData } = await makeBlueCallbackOffer({
+    publicClient,
+    walletClient: wallet(maker),
+    account: maker,
+    blue: BLUE,
+    callbackFactory: CALLBACK_FACTORY,
+    ratifier: ECRECOVER_RATIFIER,
+    blueMarket: BLUE_MARKET,
+    midnightMarket: MIDNIGHT_MARKET,
+    assets: OFFER_SIZE,
     tick,
     expiry: BigInt(MIDNIGHT_MARKET.maturity) - 1n,
-    callback,
-    callbackData,
-    ratifier: ECRECOVER_RATIFIER,
-    maxAssets: OFFER_SIZE,
+    salt: SALT,
   })
-  const tree = Tree.create([offer])
-  const [ratified] = await EcrecoverRatifierUtils.ratify({ tree, client: wallet(maker), account: maker })
-  assert(ratified)
-  const offerStruct = OfferUtils.toStruct({ offer: ratified.offer })
+  assert.notEqual(callback, zeroAddress)
+  assert.equal(
+    (await publicClient.readContract({ address: callback, abi: blueBuyCallbackAbi, functionName: 'OWNER' })).toLowerCase(),
+    maker.address.toLowerCase(),
+  )
 
   const { result: computedMarketId } = await publicClient.simulateContract({
     account: borrower,
@@ -249,15 +190,6 @@ async function main() {
     args: [MarketUtils.toStruct(MIDNIGHT_MARKET), 0n, COLLATERAL, borrower.address],
   })
 
-  const settlementFee = await publicClient.readContract({
-    address: MIDNIGHT,
-    abi: midnightAbi,
-    functionName: 'settlementFee',
-    args: [MIDNIGHT_MARKET_ID, BigInt(MIDNIGHT_MARKET.maturity) - block.timestamp],
-  })
-  const unitsFor = (buyerAssets: bigint) =>
-    TakeAmountsLib.buyerAssetsToUnits({ offer, targetBuyerAssets: buyerAssets, settlementFee })
-
   const boundBefore = await callbackBound(callback, callbackData)
   const sharesBefore = await blueSupplyShares(callback)
   const makerPositionBefore = await midnightPosition(maker.address)
@@ -265,25 +197,16 @@ async function main() {
   const borrowerUsdcBefore = await tokenBalance(USDC, borrower.address)
   assert(boundBefore >= OFFER_SIZE - 2n, 'callback does not hold the expected Blue position')
 
-  const firstUnits = unitsFor(FIRST_FILL)
-  const { result: firstResult, request: firstTake } = await publicClient.simulateContract({
+  const firstTake = await takeOffer({
+    publicClient,
+    walletClient: wallet(borrower),
     account: borrower,
-    address: MIDNIGHT,
-    abi: midnightAbi,
-    functionName: 'take',
-    args: [
-      offerStruct,
-      ratified.ratifierData,
-      firstUnits,
-      borrower.address,
-      borrower.address,
-      zeroAddress,
-      '0x',
-    ],
+    offer,
+    ratifierData,
+    buyerAssets: FIRST_FILL,
   })
-  const [firstBuyerAssets, firstSellerAssets] = firstResult
+  const [firstBuyerAssets, firstSellerAssets] = firstTake.result
   assert(firstBuyerAssets <= FIRST_FILL)
-  await send(borrower, firstTake as never)
 
   const boundAfterFirst = await callbackBound(callback, callbackData)
   const sharesAfterFirst = await blueSupplyShares(callback)
@@ -293,32 +216,23 @@ async function main() {
 
   assert(sharesAfterFirst < sharesBefore, 'the callback did not withdraw from Blue')
   assert(boundAfterFirst < boundBefore, 'the callback bound did not decrease')
-  assert.equal(makerPositionAfterFirst[0] - makerPositionBefore[0], firstUnits)
-  assert.equal(borrowerPositionAfterFirst[4] - borrowerPositionBefore[4], firstUnits)
+  assert.equal(makerPositionAfterFirst[0] - makerPositionBefore[0], firstTake.units)
+  assert.equal(borrowerPositionAfterFirst[4] - borrowerPositionBefore[4], firstTake.units)
   assert.equal(borrowerUsdcAfterFirst - borrowerUsdcBefore, firstSellerAssets)
 
-  const secondUnits = unitsFor(SECOND_FILL)
-  const { request: secondTake } = await publicClient.simulateContract({
+  const secondTake = await takeOffer({
+    publicClient,
+    walletClient: wallet(borrower),
     account: borrower,
-    address: MIDNIGHT,
-    abi: midnightAbi,
-    functionName: 'take',
-    args: [
-      offerStruct,
-      ratified.ratifierData,
-      secondUnits,
-      borrower.address,
-      borrower.address,
-      zeroAddress,
-      '0x',
-    ],
+    offer,
+    ratifierData,
+    buyerAssets: SECOND_FILL,
   })
-  await send(borrower, secondTake as never)
 
   const boundAfterSecond = await callbackBound(callback, callbackData)
   const makerPositionAfterSecond = await midnightPosition(maker.address)
   assert(boundAfterSecond < boundAfterFirst)
-  assert.equal(makerPositionAfterSecond[0] - makerPositionAfterFirst[0], secondUnits)
+  assert.equal(makerPositionAfterSecond[0] - makerPositionAfterFirst[0], secondTake.units)
 
   const liquidityRemoved = parseUnits('60', 6)
   await send(maker, {
@@ -330,22 +244,13 @@ async function main() {
   const staleBound = await callbackBound(callback, callbackData)
   assert(staleBound <= boundAfterSecond - liquidityRemoved + 2n)
 
-  const oversizedUnits = unitsFor(parseUnits('10', 6))
   await assert.rejects(
-    publicClient.simulateContract({
+    simulateTake({
+      publicClient,
       account: borrower,
-      address: MIDNIGHT,
-      abi: midnightAbi,
-      functionName: 'take',
-      args: [
-        offerStruct,
-        ratified.ratifierData,
-        oversizedUnits,
-        borrower.address,
-        borrower.address,
-        zeroAddress,
-        '0x',
-      ],
+      offer,
+      ratifierData,
+      buyerAssets: parseUnits('10', 6),
     }),
     /reverted/,
   )
