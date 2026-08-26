@@ -57,7 +57,8 @@ export async function simulateTake<
     functionName: 'take',
     args: [offer, ratifierData, units, receiver, onBehalf, zeroAddress, '0x'],
   })
-  return { ...simulation, units }
+  const gas = await publicClient.estimateContractGas(simulation.request as never)
+  return { ...simulation, request: { ...simulation.request, gas: (gas * 12n) / 10n }, units }
 }
 
 /** Simulates and submits one partial fill of a signed Midnight offer. */
