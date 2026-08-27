@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
+import type { MarketId } from '@morpho-org/blue-sdk'
 import {
   MarketUtils,
   TickLib,
   midnightAbi,
 } from '@morpho-org/midnight-sdk'
-import { blueAbi } from '@morpho-org/blue-sdk-viem'
+import { blueAbi, fetchAccrualPosition } from '@morpho-org/blue-sdk-viem'
 import {
   createPublicClient,
   createWalletClient,
@@ -105,6 +106,16 @@ async function blueSupplyShares(callback: Address) {
   return position[0]
 }
 
+async function blueSupplyAssets(callback: Address) {
+  // Position assets prove what the callback owns; buyerAssetsBound only measures immediately executable capacity.
+  return (await fetchAccrualPosition(callback, BLUE_MARKET_ID as MarketId, publicClient)).supplyAssets
+}
+
+function assertApprox(actual: bigint, expected: bigint, tolerance = 2n) {
+  const difference = actual > expected ? actual - expected : expected - actual
+  assert(difference <= tolerance, `expected ${actual} to be within ${tolerance} of ${expected}`)
+}
+
 async function midnightPosition(user: Address) {
   return publicClient.readContract({
     address: MIDNIGHT,
@@ -130,6 +141,16 @@ async function main() {
   assert.equal(chainId, CHAIN_ID, `Anvil Base fork is not reachable at ${RPC_URL}`)
   assert.notEqual(await publicClient.getCode({ address: CALLBACK_FACTORY }), '0x', 'callback factory is not deployed')
 
+  // Validate pinned market constants before any test funding or maker-side transactions.
+  const { result: computedMarketId } = await publicClient.simulateContract({
+    account: borrower,
+    address: MIDNIGHT,
+    abi: midnightAbi,
+    functionName: 'touchMarket',
+    args: [MarketUtils.toStruct(MIDNIGHT_MARKET)],
+  })
+  assert.equal(computedMarketId, MIDNIGHT_MARKET_ID, 'pinned Midnight market params changed')
+
   await Promise.all([setEthBalance(maker.address), setEthBalance(borrower.address), setEthBalance(BLUE)])
 
   await send(BLUE, {
@@ -141,7 +162,7 @@ async function main() {
 
   const block = await publicClient.getBlock()
   const tick = sixPercentTick(block.timestamp)
-  const callback = await prepareBlueCallbackPosition({
+  const prepareParameters = {
     publicClient,
     walletClient: wallet(maker),
     account: maker,
@@ -152,7 +173,8 @@ async function main() {
     midnightMarket: MIDNIGHT_MARKET,
     assets: OFFER_SIZE,
     salt: SALT,
-  })
+  }
+  const callback = await prepareBlueCallbackPosition(prepareParameters)
   const { callbackData, offer, ratifierData } = await signBlueCallbackOffer({
     walletClient: wallet(maker),
     account: maker,
@@ -165,19 +187,14 @@ async function main() {
     expiry: BigInt(MIDNIGHT_MARKET.maturity) - 1n,
   })
   assert.notEqual(callback, zeroAddress)
+  await assert.rejects(
+    prepareBlueCallbackPosition(prepareParameters),
+    /callback already has a Blue supply position/,
+  )
   assert.equal(
     (await publicClient.readContract({ address: callback, abi: blueBuyCallbackAbi, functionName: 'OWNER' })).toLowerCase(),
     maker.address.toLowerCase(),
   )
-
-  const { result: computedMarketId } = await publicClient.simulateContract({
-    account: borrower,
-    address: MIDNIGHT,
-    abi: midnightAbi,
-    functionName: 'touchMarket',
-    args: [MarketUtils.toStruct(MIDNIGHT_MARKET)],
-  })
-  assert.equal(computedMarketId, MIDNIGHT_MARKET_ID, 'pinned Midnight market params changed')
 
   await send(BLUE, {
     address: CBBTC,
@@ -198,12 +215,14 @@ async function main() {
     args: [MarketUtils.toStruct(MIDNIGHT_MARKET), 0n, COLLATERAL, borrower.address],
   })
 
-  const boundBefore = await callbackBound(callback, callbackData)
+  const capacityBefore = await callbackBound(callback, callbackData)
   const sharesBefore = await blueSupplyShares(callback)
+  const suppliedBefore = await blueSupplyAssets(callback)
   const makerPositionBefore = await midnightPosition(maker.address)
   const borrowerPositionBefore = await midnightPosition(borrower.address)
   const borrowerUsdcBefore = await tokenBalance(USDC, borrower.address)
-  assert(boundBefore >= OFFER_SIZE - 2n, 'callback does not hold the expected Blue position')
+  assertApprox(suppliedBefore, OFFER_SIZE)
+  assert(capacityBefore >= OFFER_SIZE - 2n, 'callback cannot immediately fund the offer')
 
   const firstTake = await takeOffer({
     publicClient,
@@ -214,16 +233,18 @@ async function main() {
     buyerAssets: FIRST_FILL,
   })
   const [firstBuyerAssets, firstSellerAssets] = firstTake.result
-  assert(firstBuyerAssets <= FIRST_FILL)
+  assertApprox(firstBuyerAssets, FIRST_FILL)
 
-  const boundAfterFirst = await callbackBound(callback, callbackData)
+  const capacityAfterFirst = await callbackBound(callback, callbackData)
   const sharesAfterFirst = await blueSupplyShares(callback)
+  const suppliedAfterFirst = await blueSupplyAssets(callback)
   const makerPositionAfterFirst = await midnightPosition(maker.address)
   const borrowerPositionAfterFirst = await midnightPosition(borrower.address)
   const borrowerUsdcAfterFirst = await tokenBalance(USDC, borrower.address)
 
   assert(sharesAfterFirst < sharesBefore, 'the callback did not withdraw from Blue')
-  assert(boundAfterFirst < boundBefore, 'the callback bound did not decrease')
+  assertApprox(suppliedBefore - suppliedAfterFirst, firstBuyerAssets)
+  assert(capacityAfterFirst < capacityBefore, 'the callback capacity did not decrease')
   assert.equal(makerPositionAfterFirst[0] - makerPositionBefore[0], firstTake.units)
   assert.equal(borrowerPositionAfterFirst[4] - borrowerPositionBefore[4], firstTake.units)
   assert.equal(borrowerUsdcAfterFirst - borrowerUsdcBefore, firstSellerAssets)
@@ -236,10 +257,14 @@ async function main() {
     ratifierData,
     buyerAssets: SECOND_FILL,
   })
+  const [secondBuyerAssets] = secondTake.result
+  assertApprox(secondBuyerAssets, SECOND_FILL)
 
-  const boundAfterSecond = await callbackBound(callback, callbackData)
+  const capacityAfterSecond = await callbackBound(callback, callbackData)
+  const suppliedAfterSecond = await blueSupplyAssets(callback)
   const makerPositionAfterSecond = await midnightPosition(maker.address)
-  assert(boundAfterSecond < boundAfterFirst)
+  assertApprox(suppliedAfterFirst - suppliedAfterSecond, secondBuyerAssets)
+  assert(capacityAfterSecond < capacityAfterFirst)
   assert.equal(makerPositionAfterSecond[0] - makerPositionAfterFirst[0], secondTake.units)
 
   const liquidityRemoved = parseUnits('60', 6)
@@ -250,7 +275,7 @@ async function main() {
     args: [BLUE_MARKET, liquidityRemoved, 0n, callback, maker.address],
   })
   const staleBound = await callbackBound(callback, callbackData)
-  assert(staleBound <= boundAfterSecond - liquidityRemoved + 2n)
+  assert(staleBound <= capacityAfterSecond - liquidityRemoved + 2n)
 
   await assert.rejects(
     simulateTake({
@@ -267,11 +292,12 @@ async function main() {
   console.log('Blue callback limit order')
   console.log(`  callback:             ${callback}`)
   console.log(`  fixed APR:            ${(Number(apr) / 1e16).toFixed(4)}%`)
-  console.log(`  Blue before:          ${displayUsdc(boundBefore)}`)
+  console.log(`  Blue supplied before: ${displayUsdc(suppliedBefore)}`)
   console.log(`  first fill:           ${displayUsdc(firstBuyerAssets)}`)
   console.log(`  borrower received:    ${displayUsdc(firstSellerAssets)}`)
-  console.log(`  Blue after first:     ${displayUsdc(boundAfterFirst)}`)
-  console.log(`  Blue after second:    ${displayUsdc(boundAfterSecond)}`)
+  console.log(`  Blue after first:     ${displayUsdc(suppliedAfterFirst)}`)
+  console.log(`  Blue after second:    ${displayUsdc(suppliedAfterSecond)}`)
+  console.log(`  callback capacity:    ${displayUsdc(staleBound)}`)
   console.log(`  stale-liquidity take: reverted as expected`)
   console.log('PASS')
 }
