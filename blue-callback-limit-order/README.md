@@ -6,7 +6,7 @@ The example separates reusable maker and taker functions. The test uses deployed
 
 ## Implementation
 
-- [`prepareBlueCallbackPosition()`](src/maker.ts) creates the callback when needed, approves Blue, supplies USDC with the callback as position owner and authorizes the ratifier.
+- [`prepareBlueCallbackPosition()`](src/maker.ts) creates or resumes an empty callback, rejects an already-funded callback, supplies USDC with the callback as position owner and authorizes the ratifier.
 - [`signBlueCallbackOffer()`](src/maker.ts) constructs and signs an offer with `@morpho-org/midnight-sdk` without changing onchain state.
 - [`simulateTake()`](src/taker.ts) reads the current settlement fee, quotes the requested partial fill and simulates `take()` without changing state.
 - [`takeOffer()`](src/taker.ts) calls `simulateTake()` and submits its exact request.
@@ -24,7 +24,7 @@ The test performs the following flow:
 4. Signs the offer locally using the deployed `EcrecoverRatifier` scheme.
 5. Supplies cbBTC collateral for a local borrower.
 6. Simulates and executes a 25 USDC partial fill.
-7. Verifies that the callback withdrew 25 USDC from Blue, the lender received Midnight credit, the borrower received USDC and the borrower incurred matching Midnight debt.
+7. Verifies from the callback's actual Blue position that it withdrew 25 USDC, the lender received Midnight credit, the borrower received USDC and the borrower incurred matching Midnight debt.
 8. Executes a second 10 USDC partial fill with the same signed offer.
 9. Removes most of the remaining Blue liquidity and verifies that a stale oversized fill reverts.
 
@@ -33,11 +33,12 @@ Expected summary:
 ```text
 Blue callback limit order
   fixed APR:            ~6.00%
-  Blue before:          100 USDC
+  Blue supplied before: 100 USDC
   first fill:           25 USDC
   borrower received:    25 USDC
   Blue after first:     75 USDC
   Blue after second:    65 USDC
+  callback capacity:     5 USDC
   stale-liquidity take: reverted as expected
 PASS
 ```
