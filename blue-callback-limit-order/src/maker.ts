@@ -1,4 +1,4 @@
-import { marketParamsAbi, type InputMarketParams } from '@morpho-org/blue-sdk'
+import { MarketParams, marketParamsAbi, type InputMarketParams } from '@morpho-org/blue-sdk'
 import { blueAbi } from '@morpho-org/blue-sdk-viem'
 import {
   EcrecoverRatifierUtils,
@@ -132,6 +132,18 @@ async function approveBlue(context: MakerContext, assets: bigint) {
   )
 }
 
+async function assertUnfundedCallback(context: MakerContext, callback: Address) {
+  const { publicClient, blue, blueMarket } = context
+  const position = await publicClient.readContract({
+    address: blue,
+    abi: blueAbi,
+    functionName: 'position',
+    args: [new MarketParams(blueMarket).id, callback],
+  })
+  // An empty deployment can resume after failure, but a funded per-offer callback must not be silently topped up.
+  if (position[0] !== 0n) throw new Error('callback already has a Blue supply position')
+}
+
 async function supplyBlue(context: MakerContext, callback: Address, assets: bigint) {
   const { publicClient, walletClient, account, blue, blueMarket } = context
   await confirm(
@@ -179,6 +191,7 @@ export async function prepareBlueCallbackPosition({
   validateMarkets(context)
 
   const callback = await createCallback(context, salt)
+  await assertUnfundedCallback(context, callback)
   await approveBlue(context, assets)
   await supplyBlue(context, callback, assets)
   await authorizeRatifier(context)
