@@ -145,6 +145,7 @@ async function assertUnfundedCallback(context: MakerContext, callback: Address) 
 }
 
 async function supplyBlue(context: MakerContext, callback: Address, assets: bigint) {
+  // A production flow could batch the onchain setup and Blue supply through Bundler3, then publish the signed offer after confirmation.
   const { publicClient, walletClient, account, blue, blueMarket } = context
   await confirm(
     publicClient,
