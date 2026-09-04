@@ -20,7 +20,7 @@ as libraries or starting points for live deployments.
 | POC | Status | Purpose |
 | --- | --- | --- |
 | [`rolling/`](rolling/) | Implemented (unaudited prototype) | Move a fixed-maturity position into a later Midnight market using four alternative refinancing and liquidity mechanisms. |
-| [`warehousing/`](warehousing/) | Documentation only, no code | Outline a possible future fixed-maturity warehousing facility with senior and junior capital. Exploratory design notes only, with no commitment that it will ever be built. |
+| [`warehousing/`](warehousing/) | Implemented (unaudited prototype) | Demonstrate a simple receivable warehouse with junior first-loss capital, a Midnight senior draw, cash sweeps, deficiency controls and senior-first run-off. |
 
 ## Getting started
 
