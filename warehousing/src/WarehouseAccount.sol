@@ -159,6 +159,7 @@ contract WarehouseAccount {
     {
         if (units == 0 || !offer.buy || !marketConfigured) revert InvalidOffer();
         _requireMarket(offer.market);
+        _validateMarket(offer.market, collateralIndex);
         _requireCompliant();
 
         (, proceeds) = midnight.take(offer, ratifierData, units, address(this), address(this), address(0), "");
@@ -170,6 +171,7 @@ contract WarehouseAccount {
     /// @notice Deploy facility cash to the fixed use-of-proceeds account while the borrowing base is sound.
     function sweepCash(uint256 amount) external onlyOperator onlyActive {
         if (amount == 0) revert ZeroAmount();
+        if (!marketConfigured) revert MarketNotConfigured();
         _requireCompliant();
         SafeTransferLib.safeTransfer(loanToken, cashRecipient, amount);
         emit CashSwept(cashRecipient, amount);
@@ -297,7 +299,7 @@ contract WarehouseAccount {
 
     function _requireMarket(Market calldata market) internal view {
         if (!marketConfigured) revert MarketNotConfigured();
-        if (_validateMarket(market, collateralIndex) != activeMarketId) revert InvalidMarket();
+        if (IdLib.toId(market) != activeMarketId) revert InvalidMarket();
     }
 
     function _requireCompliant() internal view {

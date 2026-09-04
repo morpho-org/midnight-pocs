@@ -27,7 +27,6 @@ contract AssetRegistry {
     error InvalidAdvanceRate();
     error InvalidOracle();
     error AssetNotConfigured();
-    error AssetNotEligible();
 
     constructor(address _operator) {
         if (_operator == address(0)) revert ZeroAddress();
