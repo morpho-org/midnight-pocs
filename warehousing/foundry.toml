@@ -1,7 +1,7 @@
 [profile.default]
 src = "src"
 out = "out"
-libs = ["../rolling/lib"]
+libs = ["lib"]
 test = "test"
 solc = "0.8.34"
 optimizer = true
