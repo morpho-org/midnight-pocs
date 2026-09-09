@@ -80,6 +80,42 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         assertEq(MIDNIGHT.collateral(marketId, address(warehouse), 0), POOL_FACE, "pledge changed on revert");
     }
 
+    function test_onlyPledgedReceivablesSupportBorrowingBaseAndLooseAssetsRemainRecoverable() public {
+        _fundLender(1_000_000e6);
+        _depositJunior(300_000e6);
+
+        receivable.mint(operator, POOL_FACE);
+        vm.startPrank(operator);
+        receivable.approve(address(warehouse), POOL_FACE);
+        warehouse.depositReceivables(POOL_FACE);
+        warehouse.pledgeReceivables(market, 0, 800_000e6);
+        vm.stopPrank();
+
+        assertEq(warehouse.totalReceivables(), POOL_FACE, "total pool is wrong");
+        assertEq(warehouse.pledgedReceivables(), 800_000e6, "pledged pool is wrong");
+        assertEq(warehouse.unpledgedReceivables(), 200_000e6, "loose pool is wrong");
+        assertEq(warehouse.borrowingBase(), 600_000e6, "loose assets received borrowing-base credit");
+
+        Offer memory offer = _offer(SENIOR_FACE, keccak256("partial pledge"));
+        bytes memory ratifierData = _ratify(offer);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                WarehouseAccount.BorrowingBaseExceeded.selector, uint256(SENIOR_FACE), uint256(600_000e6)
+            )
+        );
+        vm.prank(operator);
+        warehouse.borrow(offer, ratifierData, SENIOR_FACE);
+
+        vm.startPrank(operator);
+        warehouse.enterRunOff();
+        warehouse.releaseUnpledgedReceivables(200_000e6, address(this));
+        warehouse.releaseReceivables(market, 800_000e6, address(this));
+        vm.stopPrank();
+
+        assertEq(warehouse.totalReceivables(), 0, "run-off stranded receivables");
+        assertEq(receivable.balanceOf(address(this)), POOL_FACE, "receivables were not recovered");
+    }
+
     function test_runOffIsOneWayAndSeniorAlwaysRanksAheadOfJunior() public {
         _openWarehouse();
 

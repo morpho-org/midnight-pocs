@@ -46,6 +46,7 @@ contract WarehouseAccount {
     event SeniorRepaid(bytes32 indexed marketId, uint256 units);
     event CollectionsSweptToSenior(bytes32 indexed marketId, uint256 units);
     event ReceivablesReleased(address indexed recipient, uint256 amount);
+    event UnpledgedReceivablesReleased(address indexed recipient, uint256 amount);
     event StateChanged(State indexed previousState, State indexed newState);
     event JuniorResidualWithdrawn(address indexed recipient, uint256 amount);
 
@@ -222,6 +223,17 @@ contract WarehouseAccount {
         emit ReceivablesReleased(recipient, amount);
     }
 
+    /// @notice Recover receivables that were deposited but never pledged once the facility is fully run off.
+    function releaseUnpledgedReceivables(uint256 amount, address recipient) external onlyOperator {
+        if (state != State.RunOff) revert InvalidState();
+        if (seniorDebt() != 0) revert SeniorOutstanding();
+        if (amount == 0) revert ZeroAmount();
+        if (recipient == address(0)) revert ZeroAddress();
+
+        SafeTransferLib.safeTransfer(receivableToken, recipient, amount);
+        emit UnpledgedReceivablesReleased(recipient, amount);
+    }
+
     // -------------------------------------------------------------------------- state and waterfall
 
     /// @notice A public, objective test using the registry's current oracle price and advance rate.
@@ -268,8 +280,15 @@ contract WarehouseAccount {
     }
 
     function totalReceivables() public view returns (uint256 total) {
-        total = IERC20Like(receivableToken).balanceOf(address(this));
-        if (marketConfigured) total += midnight.collateral(activeMarketId, address(this), collateralIndex);
+        return unpledgedReceivables() + pledgedReceivables();
+    }
+
+    function unpledgedReceivables() public view returns (uint256) {
+        return IERC20Like(receivableToken).balanceOf(address(this));
+    }
+
+    function pledgedReceivables() public view returns (uint256) {
+        return marketConfigured ? midnight.collateral(activeMarketId, address(this), collateralIndex) : 0;
     }
 
     function collateralValue() public view returns (uint256) {
@@ -277,7 +296,7 @@ contract WarehouseAccount {
     }
 
     function borrowingBase() public view returns (uint256) {
-        return assetRegistry.borrowingBase(receivableToken, totalReceivables());
+        return assetRegistry.borrowingBase(receivableToken, pledgedReceivables());
     }
 
     function seniorDebt() public view returns (uint256) {

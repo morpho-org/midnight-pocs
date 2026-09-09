@@ -52,7 +52,9 @@ freeze new money and cure a borrowing-base deficiency before its position become
 | `src/WarehouseAccount.sol` | Holds junior cash and receivables, owns the Midnight debt position, sweeps cash, and enforces facility states and payment priority. |
 | `test/mocks/MockReceivable.sol` | Provides the tokenized receivable and mutable oracle used in the demonstration. |
 
-`WarehouseAccount` derives cash, collateral, and debt from live token and Midnight state. The only cumulative
+`WarehouseAccount` derives cash, collateral, and debt from live token and Midnight state. Only receivables pledged
+to Midnight receive borrowing-base credit; deposited but unpledged tokens remain visible for reporting and can be
+recovered after senior is repaid in run-off. The only cumulative
 book entries are the junior contribution and withdrawal totals used for reporting.
 
 ## Lifecycle
@@ -86,6 +88,7 @@ The integration tests separately verify:
 - a draw above the borrowing base reverts atomically;
 - an impairment freezes draws and origination funding while its cash sweep pays senior down;
 - pledged receivables cannot leave if that would undersecure senior;
+- unpledged receivables neither support a draw nor become stranded in run-off;
 - run-off is one-way and junior remains structurally subordinated;
 - only the named operator and junior provider can move facility assets; and
 - removing an asset from the registry halts new money without trapping senior repayment or collateral release.
