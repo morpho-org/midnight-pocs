@@ -277,12 +277,13 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         MIDNIGHT.liquidate(market, 0, 0, 0, address(warehouse), false, address(this), address(0), "");
 
         assertEq(warehouse.seniorDebt(), 0, "Midnight debt was not written down");
-        assertEq(warehouse.seniorClaim(), SENIOR_FACE, "facility forgot the senior claim");
-        assertEq(warehouse.unresolvedSeniorLoss(), SENIOR_FACE, "senior loss is wrong");
+        uint256 realizedLossFactor = MIDNIGHT.lossFactor(marketId);
+        assertGt(realizedLossFactor, 0, "Midnight did not record a loss");
+        assertTrue(warehouse.hasUnacknowledgedSeniorLoss(), "facility forgot the senior loss");
         assertTrue(warehouse.checkDeficiency(), "senior loss did not freeze the facility");
 
         vm.expectRevert(
-            abi.encodeWithSelector(WarehouseAccount.UnresolvedSeniorLoss.selector, uint256(SENIOR_FACE), uint256(0))
+            abi.encodeWithSelector(WarehouseAccount.UnresolvedSeniorLoss.selector, uint256(0), realizedLossFactor)
         );
         vm.prank(operator);
         warehouse.fundOriginations(1);
@@ -293,17 +294,35 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         vm.prank(sponsor);
         warehouse.withdrawJuniorResidual(1, sponsor);
 
-        uint256 lenderBefore = USDC.balanceOf(lender);
-        vm.prank(stranger);
-        warehouse.paySeniorLoss(100_000e6);
-        assertEq(USDC.balanceOf(lender) - lenderBefore, 100_000e6, "trapped cash did not pay senior");
-
         vm.prank(lender);
-        warehouse.waiveSeniorLossClaim(650_000e6);
-        assertEq(warehouse.seniorClaim(), 0, "lender resolution did not clear the claim");
+        warehouse.acknowledgeSeniorLoss();
+        assertFalse(warehouse.hasUnacknowledgedSeniorLoss(), "lender resolution did not clear the loss");
+
+        vm.prank(sponsor);
+        warehouse.withdrawJuniorResidual(100_000e6, sponsor);
+    }
+
+    function test_cashBackedLiquidationIsNotMisclassifiedAsSeniorLoss() public {
+        _openWarehouse();
+        uint256 repaidUnits = 100_000e6;
+        uint256 lossFactorBefore = MIDNIGHT.lossFactor(marketId);
+
+        vm.warp(maturity + 1);
+        deal(address(USDC), stranger, repaidUnits, true);
+        vm.startPrank(stranger);
+        USDC.approve(address(MIDNIGHT), repaidUnits);
+        MIDNIGHT.liquidate(market, 0, 0, repaidUnits, address(warehouse), true, stranger, address(0), "");
+        vm.stopPrank();
+
+        assertEq(warehouse.seniorDebt(), uint256(SENIOR_FACE) - repaidUnits, "liquidation repayment is wrong");
+        assertEq(MIDNIGHT.lossFactor(marketId), lossFactorBefore, "cash repayment changed loss factor");
+        assertFalse(warehouse.hasUnacknowledgedSeniorLoss(), "cash repayment was classified as a loss");
+        assertTrue(warehouse.canIncreaseCredit(lender), "fixed lender was rejected");
+        assertFalse(warehouse.canIncreaseCredit(stranger), "lender credit remained transferable");
     }
 
     function test_marketRejectsEveryOtherBorrower() public {
+        _openWarehouse();
         _fundLender(1_000_000e6);
         receivable.mint(stranger, POOL_FACE);
         vm.startPrank(stranger);

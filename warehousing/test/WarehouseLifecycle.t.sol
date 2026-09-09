@@ -29,13 +29,13 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         uint256 settled = 400_000e6;
         uint128 seniorPaydown = 300_000e6;
 
-        deal(address(USDC), takeout, settled, true);
-        vm.prank(takeout);
+        deal(address(USDC), servicer, settled, true);
+        vm.prank(servicer);
         USDC.approve(address(warehouse), settled);
 
         vm.prank(operator);
-        warehouse.settleReceivables(market, takeout, settled, seniorPaydown, settled, takeout);
-        receivable.burn(takeout, settled);
+        warehouse.settleReceivables(market, servicer, settled, seniorPaydown, settled, servicer);
+        receivable.burn(servicer, settled);
 
         _depositAndPledge(settled);
 
@@ -55,7 +55,6 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         assertEq(warehouse.totalReceivables(), POOL_FACE, "replenished pool balance is wrong");
         assertEq(warehouse.borrowingBase(), SENIOR_FACE, "target advance rate was not restored");
         assertEq(warehouse.seniorDebt(), SENIOR_FACE, "target senior leverage was not restored");
-        assertEq(warehouse.seniorClaim(), SENIOR_FACE, "senior claim did not track the redraw");
         assertEq(warehouse.cashBalance(), 0, "replenishment left idle cash");
         assertEq(USDC.balanceOf(originator), 1_400_000e6, "replacement origination not funded");
         assertFalse(warehouse.checkDeficiency(), "healthy replenished pool marked deficient");
@@ -89,7 +88,7 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         warehouse.withdrawJuniorResidual(juniorResidual, sponsor);
 
         assertEq(warehouse.seniorDebt(), 0, "senior not fully repaid");
-        assertEq(warehouse.seniorClaim(), 0, "senior claim remains after repayment");
+        assertFalse(warehouse.hasUnacknowledgedSeniorLoss(), "senior loss remains after repayment");
         assertEq(warehouse.totalReceivables(), 0, "receivables remain after settlement");
         assertEq(receivable.balanceOf(takeout), POOL_FACE, "takeout did not receive the pool");
         assertEq(warehouse.cashBalance(), 0, "cash remains after waterfall");

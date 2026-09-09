@@ -1,11 +1,12 @@
 # Midnight warehouse facility POC
 
-A focused proof of concept for financing a pool of tokenized receivables with junior first-loss cash and a
-senior loan originated through Morpho Midnight.
+A focused proof of concept for financing a pool of tokenized receivables with sponsor first-loss equity and a
+senior loan originated through Morpho Midnight. The sponsor equity is not a tokenized or transferable tranche.
 
-The demonstration is intentionally one warehouse account, one receivable token, one borrower-isolated Midnight market, one
-junior provider, one senior commitment, a 21-day availability period, and one use-of-proceeds account. It shows the structure and its flow of funds; it is not an
-attempt to implement a generalized private-credit platform.
+The demonstration is intentionally one warehouse account, one receivable token, one borrower-isolated Midnight
+market, one junior provider, one senior facility cap, a 21-day availability period, and one use-of-proceeds
+account. It shows the structure and its flow of funds; it is not an attempt to implement a generalized
+private-credit platform.
 
 > [!CAUTION]
 > Experimental, unaudited research code. It is not production software and must not hold real funds.
@@ -52,10 +53,10 @@ freeze new money and cure a borrowing-base deficiency before its position become
 | `src/WarehouseAccount.sol` | Holds junior cash and receivables, owns the Midnight debt position, sweeps cash, and enforces facility states and payment priority. |
 | `test/mocks/MockReceivable.sol` | Provides the tokenized receivable and mutable oracle used in the demonstration. |
 
-`WarehouseAccount` derives cash, collateral, and debt from live token and Midnight state. Only receivables pledged
-to Midnight receive borrowing-base credit; deposited but unpledged tokens remain visible for reporting and can be
-recovered after senior is repaid in run-off. The only cumulative
-book entries are the junior contribution and withdrawal totals used for reporting.
+`WarehouseAccount` derives cash, collateral, debt, and realized-loss state from live token and Midnight state.
+Only receivables pledged to Midnight receive borrowing-base credit; deposited but unpledged tokens remain visible
+for reporting and can be recovered after senior is repaid in run-off. The only cumulative book entries are the
+junior contribution and withdrawal totals used for reporting.
 
 ## Lifecycle
 
@@ -71,11 +72,11 @@ book entries are the junior contribution and withdrawal totals used for reportin
 8. If the oracle mark or eligibility terms make debt exceed the borrowing base, anyone can flag a deficiency.
 9. A deficiency blocks new draws and origination funding. Anyone can call `sweepCollectionsToSenior` to apply
    all trapped cash to senior; added collateral, that paydown, or a recovered valuation can cure the facility.
-   If Midnight realizes bad debt, the facility preserves the unpaid senior claim and blocks junior or originator
-   distributions until cash pays that loss or the fixed senior beneficiary explicitly resolves it.
+   If Midnight realizes bad debt, the facility detects the market loss factor and blocks junior or originator
+   distributions until the fixed, non-transferable senior beneficiary acknowledges external resolution.
 10. The availability end or market maturity blocks new money and lets anyone enter run-off. Run-off permanently
     blocks new draws, receivable deposits, and origination funding. The same cash sweep
-    repays senior first; junior can withdraw only after both Midnight debt and the preserved senior claim reach zero.
+    repays senior first; junior can withdraw only after Midnight debt is zero and any realized loss is acknowledged.
 
 ## Tests
 
@@ -94,10 +95,10 @@ The integration tests separately verify:
 - a draw above the borrowing base reverts atomically;
 - an impairment freezes draws and origination funding while its cash sweep pays senior down;
 - expiry automatically closes new money and opens run-off and the cash sweep to anyone;
-- liquidation or bad-debt realization cannot erase the senior claim or unlock junior cash;
+- cash-backed liquidations are distinguished from bad-debt realization, which cannot unlock junior cash;
 - registry changes cannot rewrite the active facility's pinned oracle and advance rate;
-- a failed oracle cannot strand collateral after the preserved senior claim is fully satisfied;
-- the senior commitment, minimum draw proceeds, and single-borrower market gate are enforced;
+- a failed oracle cannot strand collateral after senior debt is fully satisfied;
+- the senior facility cap, minimum draw proceeds, and single-borrower/single-lender market gate are enforced;
 - pledged receivables cannot leave if that would undersecure senior;
 - unpledged receivables neither support a draw nor become stranded in run-off;
 - run-off is one-way and junior remains structurally subordinated;
@@ -119,11 +120,14 @@ deterministic.
 ## Deliberate limits
 
 - One warehouse account supports one receivable token and one fixed-maturity Midnight market.
-- The warehouse itself is the Midnight enter gate, so unrelated borrowers cannot socialize losses into its senior line.
+- The warehouse itself is the Midnight enter gate, so unrelated borrowers cannot socialize losses into its senior
+  line, and only its fixed senior beneficiary can hold lender credit.
 - The operator is trusted to match token movements to the legal receivable purchase and servicing records.
 - The mock receivable is transferable and the oracle is administrator-set; neither verifies off-chain assets.
 - The facility assumes the receivable and loan token use the same decimals.
 - Cash application is explicit operator execution, not an automated payment waterfall or lockbox.
+- Bad-debt recovery is deliberately conservative: assets stay frozen until the fixed senior beneficiary
+  acknowledges an external resolution; the POC does not allocate liquidation losses on-chain.
 - There are no rolls, lender aggregation, tranching tokens, servicing fees, concentration limits, grace periods,
-  liquidations, governance, deployment scripts, or UI.
+  custom liquidation strategies, governance, deployment scripts, or UI.
 - The tests demonstrate only the stated scenarios and are not a security review.

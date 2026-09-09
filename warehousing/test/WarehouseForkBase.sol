@@ -33,6 +33,7 @@ abstract contract WarehouseForkBase is Test {
     address internal sponsor = makeAddr("sponsor");
     address internal originator = makeAddr("originator");
     address internal lender = makeAddr("lender");
+    address internal servicer = makeAddr("servicer");
     address internal takeout = makeAddr("takeout");
     address internal stranger = makeAddr("stranger");
 
