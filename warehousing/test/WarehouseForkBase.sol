@@ -173,7 +173,7 @@ abstract contract WarehouseForkBase is Test {
         Offer memory offer = _offer(SENIOR_FACE, keccak256("opening draw"));
         bytes memory ratifierData = _ratify(offer);
         vm.prank(operator);
-        uint256 actualProceeds = warehouse.borrow(offer, ratifierData, SENIOR_FACE);
+        uint256 actualProceeds = warehouse.borrow(offer, ratifierData, SENIOR_FACE, proceeds);
         assertEq(actualProceeds, proceeds, "unexpected opening proceeds");
 
         vm.prank(operator);

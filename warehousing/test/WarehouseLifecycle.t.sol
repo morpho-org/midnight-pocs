@@ -28,16 +28,12 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         uint256 recycled = 100_000e6;
 
         deal(address(USDC), takeout, settled, true);
-        vm.startPrank(takeout);
+        vm.prank(takeout);
         USDC.approve(address(warehouse), settled);
-        warehouse.depositCollection(settled);
-        vm.stopPrank();
 
-        vm.startPrank(operator);
-        warehouse.repaySenior(market, seniorPaydown);
-        warehouse.releaseReceivables(market, settled, address(this));
-        vm.stopPrank();
-        receivable.burn(address(this), settled);
+        vm.prank(operator);
+        warehouse.settleReceivables(market, takeout, settled, seniorPaydown, settled, takeout);
+        receivable.burn(takeout, settled);
 
         _depositAndPledge(recycled);
         vm.prank(operator);
@@ -58,16 +54,11 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         uint256 remainingReceivables = 700_000e6;
         uint256 finalCollections = 770_000e6; // par plus a $70k portfolio gain
         deal(address(USDC), takeout, finalCollections, true);
-        vm.startPrank(takeout);
+        vm.prank(takeout);
         USDC.approve(address(warehouse), finalCollections);
-        warehouse.depositCollection(finalCollections);
-        vm.stopPrank();
 
-        vm.startPrank(operator);
-        warehouse.sweepCollectionsToSenior(market);
-        warehouse.releaseReceivables(market, remainingReceivables, address(this));
-        vm.stopPrank();
-        receivable.burn(address(this), remainingReceivables);
+        vm.prank(operator);
+        warehouse.settleReceivables(market, takeout, finalCollections, 450_000e6, remainingReceivables, takeout);
 
         // The lender withdraws the repaid face from Midnight. It earns the discount between its opening cash
         // advance and the $750k face; no warehouse accounting entry manufactures that return.
@@ -82,6 +73,7 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
 
         assertEq(warehouse.seniorDebt(), 0, "senior not fully repaid");
         assertEq(warehouse.totalReceivables(), 0, "receivables remain after settlement");
+        assertEq(receivable.balanceOf(takeout), remainingReceivables, "takeout did not receive the pool");
         assertEq(warehouse.cashBalance(), 0, "cash remains after waterfall");
         assertEq(USDC.balanceOf(sponsor), juniorResidual, "junior did not receive residual");
         assertGt(juniorResidual, junior, "junior did not receive the portfolio upside");

@@ -52,6 +52,13 @@ contract WarehouseAccount {
     event SeniorDrawn(bytes32 indexed marketId, uint256 face, uint256 proceeds);
     event OriginationsFunded(address indexed recipient, uint256 amount);
     event CollectionDeposited(address indexed payer, uint256 amount);
+    event ReceivablesSettled(
+        address indexed payer,
+        address indexed recipient,
+        uint256 collectionAmount,
+        uint256 seniorRepayment,
+        uint256 receivableAmount
+    );
     event SeniorRepaid(bytes32 indexed marketId, uint256 units);
     event CollectionsSweptToSenior(bytes32 indexed marketId, uint256 units);
     event ReceivablesReleased(address indexed recipient, uint256 amount);
@@ -68,11 +75,13 @@ contract WarehouseAccount {
     error MarketNotConfigured();
     error MarketAlreadyConfigured();
     error InvalidOffer();
+    error InvalidSettlement();
     error InvalidState();
     error FacilityDeficient();
     error FacilityNotDeficient();
     error SeniorOutstanding();
     error SeniorCommitmentExceeded(uint256 seniorDebt, uint256 seniorCommitment);
+    error InsufficientProceeds(uint256 proceeds, uint256 minimumProceeds);
     error BorrowingBaseExceeded(uint256 seniorDebt, uint256 borrowingBase);
 
     constructor(
@@ -173,7 +182,7 @@ contract WarehouseAccount {
 
     /// @notice Take the lender's buy offer. The debt face, rather than discounted proceeds, is capped by the
     ///         facility borrowing base.
-    function borrow(Offer calldata offer, bytes calldata ratifierData, uint256 units)
+    function borrow(Offer calldata offer, bytes calldata ratifierData, uint256 units, uint256 minProceeds)
         external
         onlyOperator
         onlyActive
@@ -187,6 +196,7 @@ contract WarehouseAccount {
         _requireCompliant();
 
         (, proceeds) = midnight.take(offer, ratifierData, units, address(this), address(this), address(0), "");
+        if (proceeds < minProceeds) revert InsufficientProceeds(proceeds, minProceeds);
         _requireCompliant();
 
         emit SeniorDrawn(activeMarketId, units, proceeds);
@@ -202,11 +212,43 @@ contract WarehouseAccount {
         emit OriginationsFunded(cashRecipient, amount);
     }
 
-    /// @notice Record borrower/takeout collections as actual cash. No authored accounting entry is used.
+    /// @notice Add cash to the trapped account after a deficiency, availability end, or run-off.
     function depositCollection(uint256 amount) external {
+        if (state == State.Active && !facilityExpired()) revert InvalidState();
         if (amount == 0) revert ZeroAmount();
         SafeTransferLib.safeTransferFrom(loanToken, msg.sender, address(this), amount);
         emit CollectionDeposited(msg.sender, amount);
+    }
+
+    /// @notice Atomically receive a takeout or borrower payment, repay senior, and remove the settled receivables.
+    function settleReceivables(
+        Market calldata market,
+        address payer,
+        uint256 collectionAmount,
+        uint256 seniorRepayment,
+        uint256 receivableAmount,
+        address recipient
+    ) external onlyOperator {
+        if (
+            payer == address(0) || recipient == address(0) || collectionAmount == 0 || receivableAmount == 0
+                || seniorRepayment > collectionAmount
+        ) revert InvalidSettlement();
+        _requireMarket(market);
+
+        SafeTransferLib.safeTransferFrom(loanToken, payer, address(this), collectionAmount);
+        emit CollectionDeposited(payer, collectionAmount);
+
+        if (seniorRepayment > 0) {
+            midnight.repay(market, seniorRepayment, address(this), address(0), "");
+            emit SeniorRepaid(activeMarketId, seniorRepayment);
+        }
+
+        midnight.withdrawCollateral(market, collateralIndex, receivableAmount, address(this), address(this));
+        SafeTransferLib.safeTransfer(receivableToken, recipient, receivableAmount);
+        _requireCompliant();
+
+        emit ReceivablesReleased(recipient, receivableAmount);
+        emit ReceivablesSettled(payer, recipient, collectionAmount, seniorRepayment, receivableAmount);
     }
 
     /// @notice Apply collected or junior cash to the senior position in every facility state.

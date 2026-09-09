@@ -22,7 +22,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
             )
         );
         vm.prank(operator);
-        warehouse.borrow(offer, ratifierData, excessiveFace);
+        warehouse.borrow(offer, ratifierData, excessiveFace, 0);
 
         assertEq(warehouse.seniorDebt(), 0, "reverted draw left debt");
         assertEq(warehouse.cashBalance(), 300_000e6, "reverted draw moved cash");
@@ -43,7 +43,23 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
             )
         );
         vm.prank(operator);
-        warehouse.borrow(offer, ratifierData, excessiveFace);
+        warehouse.borrow(offer, ratifierData, excessiveFace, 0);
+    }
+
+    function test_drawCannotSettleBelowMinimumProceeds() public {
+        _fundLender(1_000_000e6);
+        _depositJunior(300_000e6);
+        _depositAndPledge(POOL_FACE);
+
+        Offer memory offer = _offer(SENIOR_FACE, keccak256("minimum proceeds"));
+        bytes memory ratifierData = _ratify(offer);
+        uint256 proceeds = _expectedProceeds(SENIOR_FACE);
+
+        vm.expectRevert(abi.encodeWithSelector(WarehouseAccount.InsufficientProceeds.selector, proceeds, proceeds + 1));
+        vm.prank(operator);
+        warehouse.borrow(offer, ratifierData, SENIOR_FACE, proceeds + 1);
+
+        assertEq(warehouse.seniorDebt(), 0, "slipped draw left debt");
     }
 
     function test_impairmentFreezesNewMoneyAndSweepsCashToSeniorUntilCured() public {
@@ -71,7 +87,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         Offer memory blockedOffer = _offer(1, keccak256("blocked draw"));
         vm.expectRevert(WarehouseAccount.InvalidState.selector);
         vm.prank(operator);
-        warehouse.borrow(blockedOffer, "", 1);
+        warehouse.borrow(blockedOffer, "", 1, 0);
 
         vm.prank(stranger); // permissionless once cash is trapped
         uint256 swept = warehouse.sweepCollectionsToSenior(market);
@@ -123,7 +139,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
             )
         );
         vm.prank(operator);
-        warehouse.borrow(offer, ratifierData, SENIOR_FACE);
+        warehouse.borrow(offer, ratifierData, SENIOR_FACE, 0);
 
         vm.startPrank(operator);
         warehouse.enterRunOff();
@@ -194,11 +210,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         vm.prank(administrator);
         registry.setAsset(address(receivable), address(oracle), ADVANCE_RATE_BPS, false);
 
-        deal(address(USDC), takeout, uint256(SENIOR_FACE) + 1, true);
-        vm.startPrank(takeout);
-        USDC.approve(address(warehouse), type(uint256).max);
-        warehouse.depositCollection(uint256(SENIOR_FACE) + 1);
-        vm.stopPrank();
+        _depositJunior(uint256(SENIOR_FACE) + 1);
 
         vm.prank(operator);
         warehouse.repaySenior(market, SENIOR_FACE);
@@ -224,11 +236,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
     function test_expiryBlocksNewMoneyAndOpensPermissionlessRunOffAndSweep() public {
         _openWarehouse();
 
-        deal(address(USDC), takeout, 1e6, true);
-        vm.startPrank(takeout);
-        USDC.approve(address(warehouse), 1e6);
-        warehouse.depositCollection(1e6);
-        vm.stopPrank();
+        _depositJunior(1e6);
 
         vm.warp(warehouse.availabilityEnd());
         assertTrue(warehouse.facilityExpired(), "facility did not expire");

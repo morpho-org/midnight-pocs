@@ -65,8 +65,9 @@ book entries are the junior contribution and withdrawal totals used for reportin
 3. The operator transfers receivables into the warehouse and pledges them to Midnight.
 4. The warehouse takes a senior lender offer, subject to the borrowing-base cap.
 5. `fundOriginations` sends the combined senior and junior cash to the fixed originator account.
-6. Borrower or takeout payments enter through `depositCollection`.
-7. While active, collections can pay down senior, release settled collateral, or fund replacement receivables.
+6. While active, borrower or takeout cash, senior repayment, and removal of the corresponding receivables occur
+   atomically through `settleReceivables`; this prevents cash and paid receivables from being counted together.
+7. The resulting equity cash can fund replacement receivables during the availability period.
 8. If the oracle mark or eligibility terms make debt exceed the borrowing base, anyone can flag a deficiency.
 9. A deficiency blocks new draws and origination funding. Anyone can call `sweepCollectionsToSenior` to apply
    all trapped cash to senior; added collateral, that paydown, or a recovered valuation can cure the facility.
