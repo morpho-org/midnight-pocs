@@ -258,7 +258,7 @@ contract WarehouseAccount {
 
     // -------------------------------------------------------------------------- state and waterfall
 
-    /// @notice A public, objective test using the facility's pinned oracle and advance rate.
+    /// @notice A public, objective test using the registry's locked oracle and advance rate.
     function checkDeficiency() public view returns (bool) {
         uint256 debt = seniorDebt();
         if (seniorLossRealized()) return true;

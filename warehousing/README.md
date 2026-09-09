@@ -53,17 +53,15 @@ freeze new money and cure a borrowing-base deficiency before its position become
 | `src/WarehouseAccount.sol` | Holds junior cash and receivables, owns the Midnight debt position, sweeps cash, and enforces facility states and payment priority. |
 | `test/mocks/MockReceivable.sol` | Provides the tokenized receivable and mutable oracle used in the demonstration. |
 
-`WarehouseAccount` derives cash, collateral, debt, and realized-loss state from live token and Midnight state.
-Only receivables pledged to Midnight receive borrowing-base credit; deposited but unpledged tokens remain visible
-for reporting and can be recovered after senior is repaid in run-off. The only cumulative book entries are the
-junior contribution and withdrawal totals used for reporting.
+`WarehouseAccount` uses live token and Midnight state rather than maintaining parallel accounting. Only pledged
+receivables receive borrowing-base credit. Any accidentally transferred loose tokens are recoverable after senior
+is discharged in run-off.
 
 ## Lifecycle
 
-1. The administrator allows a receivable and assigns its oracle and advance rate. The warehouse pins those terms
-   when its Midnight market is configured; subsequent registry changes cannot loosen the active facility.
+1. The administrator allows a receivable and assigns its oracle and advance rate; those terms are then locked.
 2. Junior deposits the first-loss cash required to complete the receivable purchase.
-3. The operator transfers receivables into the warehouse and pledges them to Midnight.
+3. The operator atomically transfers and pledges receivables to Midnight.
 4. The warehouse takes a senior lender offer, subject to the borrowing-base cap.
 5. `fundOriginations` sends the combined senior and junior cash to the fixed originator account.
 6. While active, borrower or takeout cash, senior repayment, and removal of the corresponding receivables occur
@@ -72,11 +70,10 @@ junior contribution and withdrawal totals used for reporting.
 8. If the oracle mark or eligibility terms make debt exceed the borrowing base, anyone can flag a deficiency.
 9. A deficiency blocks new draws and origination funding. Anyone can call `sweepCollectionsToSenior` to apply
    all trapped cash to senior; added collateral, that paydown, or a recovered valuation can cure the facility.
-   If Midnight realizes bad debt, the facility detects the market loss factor and blocks junior or originator
-   distributions until the fixed, non-transferable senior beneficiary acknowledges external resolution.
-10. The availability end or market maturity blocks new money and lets anyone enter run-off. Run-off permanently
-    blocks new draws, receivable deposits, and origination funding. The same cash sweep
-    repays senior first; junior can withdraw only after Midnight debt is zero and any realized loss is acknowledged.
+   A realized Midnight loss permanently freezes outward distributions; recovery is outside this focused POC.
+10. The availability end, which cannot exceed market maturity, blocks new money and lets anyone enter run-off.
+    Run-off permanently blocks new draws, receivable deposits, and origination funding. The same cash sweep
+    repays senior first; junior can withdraw only after Midnight debt is zero and no loss was realized.
 
 ## Tests
 
@@ -95,8 +92,8 @@ The integration tests separately verify:
 - a draw above the borrowing base reverts atomically;
 - an impairment freezes draws and origination funding while its cash sweep pays senior down;
 - expiry automatically closes new money and opens run-off and the cash sweep to anyone;
-- cash-backed liquidations are distinguished from bad-debt realization, which cannot unlock junior cash;
-- registry changes cannot rewrite the active facility's pinned oracle and advance rate;
+- cash-backed liquidations are distinguished from bad-debt realization, which permanently freezes junior cash;
+- configured oracle and advance-rate terms cannot be rewritten;
 - a failed oracle cannot strand collateral after senior debt is fully satisfied;
 - the senior facility cap, minimum draw proceeds, and single-borrower/single-lender market gate are enforced;
 - pledged receivables cannot leave if that would undersecure senior;
@@ -120,14 +117,13 @@ deterministic.
 ## Deliberate limits
 
 - One warehouse account supports one receivable token and one fixed-maturity Midnight market.
-- The warehouse itself is the Midnight enter gate, so unrelated borrowers cannot socialize losses into its senior
-  line, and only its fixed senior beneficiary can hold lender credit.
+- The warehouse itself is the Midnight enter gate, so only this borrower and its fixed senior lender can use the
+  market.
 - The operator is trusted to match token movements to the legal receivable purchase and servicing records.
 - The mock receivable is transferable and the oracle is administrator-set; neither verifies off-chain assets.
 - The facility assumes the receivable and loan token use the same decimals.
 - Cash application is explicit operator execution, not an automated payment waterfall or lockbox.
-- Bad-debt recovery is deliberately conservative: assets stay frozen until the fixed senior beneficiary
-  acknowledges an external resolution; the POC does not allocate liquidation losses on-chain.
+- A realized bad-debt loss makes the demo terminal; it does not attempt on-chain loss recovery.
 - There are no rolls, lender aggregation, tranching tokens, servicing fees, concentration limits, grace periods,
   custom liquidation strategies, governance, deployment scripts, or UI.
 - The tests demonstrate only the stated scenarios and are not a security review.
