@@ -3,7 +3,7 @@
 A focused proof of concept for financing a pool of tokenized receivables with junior first-loss cash and a
 senior loan originated through Morpho Midnight.
 
-The demonstration is intentionally one warehouse account, one receivable token, one Midnight market, one
+The demonstration is intentionally one warehouse account, one receivable token, one borrower-isolated Midnight market, one
 junior provider, one senior commitment, a 21-day availability period, and one use-of-proceeds account. It shows the structure and its flow of funds; it is not an
 attempt to implement a generalized private-credit platform.
 
@@ -113,6 +113,7 @@ deterministic.
 ## Deliberate limits
 
 - One warehouse account supports one receivable token and one fixed-maturity Midnight market.
+- The warehouse itself is the Midnight enter gate, so unrelated borrowers cannot socialize losses into its senior line.
 - The operator is trusted to match token movements to the legal receivable purchase and servicing records.
 - The mock receivable is transferable and the oracle is administrator-set; neither verifies off-chain assets.
 - The facility assumes the receivable and loan token use the same decimals.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.34;
 
-import {Offer} from "midnight/interfaces/IMidnight.sol";
+import {IMidnight, Offer} from "midnight/interfaces/IMidnight.sol";
 import {WarehouseAccount} from "../src/WarehouseAccount.sol";
 import {WarehouseForkBase} from "./WarehouseForkBase.sol";
 import {MockReceivableOracle} from "./mocks/MockReceivable.sol";
@@ -284,6 +284,22 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         vm.prank(lender);
         warehouse.waiveSeniorLossClaim(650_000e6);
         assertEq(warehouse.seniorClaim(), 0, "lender resolution did not clear the claim");
+    }
+
+    function test_marketRejectsEveryOtherBorrower() public {
+        _fundLender(1_000_000e6);
+        receivable.mint(stranger, POOL_FACE);
+        vm.startPrank(stranger);
+        receivable.approve(address(MIDNIGHT), POOL_FACE);
+        MIDNIGHT.supplyCollateral(market, 0, POOL_FACE, stranger);
+        vm.stopPrank();
+
+        Offer memory offer = _offer(SENIOR_FACE, keccak256("unrelated borrower"));
+        bytes memory ratifierData = _ratify(offer);
+
+        vm.expectRevert(IMidnight.SellerGatedFromIncreasingDebt.selector);
+        vm.prank(stranger);
+        MIDNIGHT.take(offer, ratifierData, SENIOR_FACE, stranger, stranger, address(0), "");
     }
 
     function test_onlyNamedPartiesCanMoveWarehouseAssets() public {

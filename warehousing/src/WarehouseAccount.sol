@@ -439,12 +439,22 @@ contract WarehouseAccount {
         return block.timestamp >= availabilityEnd || (marketConfigured && block.timestamp >= marketMaturity);
     }
 
+    /// @notice Midnight enter-gate hook: lenders may enter, but this market has exactly one borrower.
+    function canIncreaseCredit(address) external pure returns (bool) {
+        return true;
+    }
+
+    /// @notice Midnight enter-gate hook that isolates senior credit from unrelated warehouse borrowers.
+    function canIncreaseDebt(address account) external view returns (bool) {
+        return account == address(this);
+    }
+
     // -------------------------------------------------------------------------- internal validation
 
     function _validateMarket(Market calldata market, uint256 index) internal view returns (bytes32) {
         if (
             market.chainId != block.chainid || market.midnight != address(midnight) || market.loanToken != loanToken
-                || index >= market.collateralParams.length
+                || market.enterGate != address(this) || index >= market.collateralParams.length
         ) revert InvalidMarket();
 
         (bool eligible, uint16 advanceRateBps, address oracle) = assetRegistry.registry(receivableToken);

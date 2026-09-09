@@ -94,7 +94,7 @@ abstract contract WarehouseForkBase is Test {
             collateralParams: params,
             maturity: marketMaturity,
             rcfThreshold: 0,
-            enterGate: address(0),
+            enterGate: address(warehouse),
             liquidatorGate: address(0)
         });
     }
