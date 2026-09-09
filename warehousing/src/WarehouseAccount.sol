@@ -41,9 +41,10 @@ contract WarehouseAccount {
     event ReceivablesDeposited(uint256 amount);
     event ReceivablesPledged(bytes32 indexed marketId, uint256 amount);
     event SeniorDrawn(bytes32 indexed marketId, uint256 face, uint256 proceeds);
-    event CashSwept(address indexed recipient, uint256 amount);
+    event OriginationsFunded(address indexed recipient, uint256 amount);
     event CollectionDeposited(address indexed payer, uint256 amount);
     event SeniorRepaid(bytes32 indexed marketId, uint256 units);
+    event CollectionsSweptToSenior(bytes32 indexed marketId, uint256 units);
     event ReceivablesReleased(address indexed recipient, uint256 amount);
     event StateChanged(State indexed previousState, State indexed newState);
     event JuniorResidualWithdrawn(address indexed recipient, uint256 amount);
@@ -169,12 +170,12 @@ contract WarehouseAccount {
     }
 
     /// @notice Deploy facility cash to the fixed use-of-proceeds account while the borrowing base is sound.
-    function sweepCash(uint256 amount) external onlyOperator onlyActive {
+    function fundOriginations(uint256 amount) external onlyOperator onlyActive {
         if (amount == 0) revert ZeroAmount();
         if (!marketConfigured) revert MarketNotConfigured();
         _requireCompliant();
         SafeTransferLib.safeTransfer(loanToken, cashRecipient, amount);
-        emit CashSwept(cashRecipient, amount);
+        emit OriginationsFunded(cashRecipient, amount);
     }
 
     /// @notice Record borrower/takeout collections as actual cash. No authored accounting entry is used.
@@ -190,6 +191,22 @@ contract WarehouseAccount {
         _requireMarket(market);
         midnight.repay(market, units, address(this), address(0), "");
         emit SeniorRepaid(activeMarketId, units);
+    }
+
+    /// @notice During a deficiency or run-off, trap all facility cash and apply as much as possible to senior.
+    /// @dev Any cash above the outstanding face remains trapped because `fundOriginations` is Active-only and
+    ///      junior cannot withdraw until run-off has begun and senior debt is zero.
+    function sweepCollectionsToSenior(Market calldata market) external returns (uint256 units) {
+        if (state == State.Active) revert InvalidState();
+        _requireMarket(market);
+
+        uint256 cash = cashBalance();
+        uint256 debt = seniorDebt();
+        units = cash < debt ? cash : debt;
+        if (units == 0) revert ZeroAmount();
+
+        midnight.repay(market, units, address(this), address(0), "");
+        emit CollectionsSweptToSenior(activeMarketId, units);
     }
 
     /// @notice Release settled receivables only when the remaining pool still supports all senior debt.

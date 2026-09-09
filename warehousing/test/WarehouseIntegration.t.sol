@@ -27,7 +27,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         assertEq(warehouse.cashBalance(), 300_000e6, "reverted draw moved cash");
     }
 
-    function test_impairmentFreezesDrawsAndSweepsUntilSeniorPaydownCuresIt() public {
+    function test_impairmentFreezesNewMoneyAndSweepsCashToSeniorUntilCured() public {
         _openWarehouse();
 
         // A 10% mark lowers the 75% borrowing base from $750k to $675k. Midnight's 96.5% liquidation
@@ -44,7 +44,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
             )
         );
         vm.prank(operator);
-        warehouse.sweepCash(1);
+        warehouse.fundOriginations(1);
 
         warehouse.flagDeficiency();
         assertEq(uint256(warehouse.state()), uint256(WarehouseAccount.State.Deficiency));
@@ -54,8 +54,10 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         vm.prank(operator);
         warehouse.borrow(blockedOffer, "", 1);
 
-        vm.prank(operator);
-        warehouse.repaySenior(market, 75_000e6);
+        vm.prank(stranger); // permissionless once cash is trapped
+        uint256 swept = warehouse.sweepCollectionsToSenior(market);
+        assertEq(swept, 75_000e6, "cash sweep did not repay all available cash");
+        assertEq(warehouse.cashBalance(), 0, "cash was not fully trapped and swept");
         assertFalse(warehouse.checkDeficiency(), "senior paydown did not cure economics");
 
         vm.prank(operator);
@@ -81,12 +83,16 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
     function test_runOffIsOneWayAndSeniorAlwaysRanksAheadOfJunior() public {
         _openWarehouse();
 
+        vm.expectRevert(WarehouseAccount.InvalidState.selector);
+        vm.prank(operator);
+        warehouse.sweepCollectionsToSenior(market);
+
         vm.prank(operator);
         warehouse.enterRunOff();
 
         vm.expectRevert(WarehouseAccount.InvalidState.selector);
         vm.prank(operator);
-        warehouse.sweepCash(1);
+        warehouse.fundOriginations(1);
 
         vm.expectRevert(WarehouseAccount.InvalidState.selector);
         vm.prank(operator);
@@ -118,7 +124,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         vm.stopPrank();
 
         vm.startPrank(operator);
-        warehouse.repaySenior(market, SENIOR_FACE);
+        warehouse.sweepCollectionsToSenior(market);
         warehouse.enterRunOff();
         warehouse.releaseReceivables(market, POOL_FACE, address(this));
         vm.stopPrank();
@@ -137,7 +143,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
 
         vm.expectRevert(WarehouseAccount.OnlyOperator.selector);
         vm.prank(stranger);
-        warehouse.sweepCash(1);
+        warehouse.fundOriginations(1);
 
         vm.expectRevert(WarehouseAccount.OnlyOperator.selector);
         vm.prank(stranger);

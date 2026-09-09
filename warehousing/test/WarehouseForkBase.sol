@@ -167,6 +167,6 @@ abstract contract WarehouseForkBase is Test {
         assertEq(actualProceeds, proceeds, "unexpected opening proceeds");
 
         vm.prank(operator);
-        warehouse.sweepCash(POOL_FACE);
+        warehouse.fundOriginations(POOL_FACE);
     }
 }

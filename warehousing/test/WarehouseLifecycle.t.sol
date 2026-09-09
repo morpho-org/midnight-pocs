@@ -41,7 +41,7 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
 
         _depositAndPledge(recycled);
         vm.prank(operator);
-        warehouse.sweepCash(recycled);
+        warehouse.fundOriginations(recycled);
 
         assertEq(warehouse.totalReceivables(), 700_000e6, "recycled pool balance is wrong");
         assertEq(warehouse.borrowingBase(), 525_000e6, "recycled borrowing base is wrong");
@@ -64,7 +64,7 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         vm.stopPrank();
 
         vm.startPrank(operator);
-        warehouse.repaySenior(market, 450_000e6);
+        warehouse.sweepCollectionsToSenior(market);
         warehouse.releaseReceivables(market, remainingReceivables, address(this));
         vm.stopPrank();
         receivable.burn(address(this), remainingReceivables);

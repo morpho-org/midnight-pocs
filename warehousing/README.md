@@ -22,13 +22,13 @@ Senior lender -------------------------> Midnight
                                             |
                                             | discounted senior proceeds
                                             v
-Originator <--------- sweepCash() ----- WarehouseAccount
+Originator <----- fundOriginations() -- WarehouseAccount
 
 Takeout / borrower ---> collections ---> WarehouseAccount
                                             |
-                                            +--> repay senior first
                                             +--> recycle cash while active
-                                            +--> junior residual in run-off
+                                            +--> cash sweep to senior in deficiency/run-off
+                                            +--> junior residual only after senior is repaid
 ```
 
 The receivable oracle reports gross value in Midnight's `1e36` scale. `AssetRegistry` applies a separate
@@ -61,14 +61,14 @@ book entries are the junior contribution and withdrawal totals used for reportin
 2. Junior deposits the first-loss cash required to complete the receivable purchase.
 3. The operator transfers receivables into the warehouse and pledges them to Midnight.
 4. The warehouse takes a senior lender offer, subject to the borrowing-base cap.
-5. `sweepCash` sends the combined senior and junior cash to the fixed originator account.
+5. `fundOriginations` sends the combined senior and junior cash to the fixed originator account.
 6. Borrower or takeout payments enter through `depositCollection`.
 7. While active, collections can pay down senior, release settled collateral, or fund replacement receivables.
 8. If the oracle mark or eligibility terms make debt exceed the borrowing base, anyone can flag a deficiency.
-9. A deficiency blocks new draws and outward sweeps. Added collateral, junior-funded repayment, or a recovered
-   valuation can cure it.
-10. Run-off permanently blocks new draws, receivable deposits, and cash sweeps. Collections repay senior first;
-    junior can withdraw only after Midnight debt reaches zero.
+9. A deficiency blocks new draws and origination funding. Anyone can call `sweepCollectionsToSenior` to apply
+   all trapped cash to senior; added collateral, that paydown, or a recovered valuation can cure the facility.
+10. Run-off permanently blocks new draws, receivable deposits, and origination funding. The same cash sweep
+    repays senior first; junior can withdraw only after Midnight debt reaches zero.
 
 ## Tests
 
@@ -76,7 +76,7 @@ The suite runs against deployed Midnight and Base USDC on a Base fork. The main 
 complete $1 million warehouse:
 
 - junior and senior funding;
-- initial receivable purchase and cash sweep;
+- initial receivable purchase and origination funding;
 - partial collection, proportional senior paydown, and cash recycling;
 - run-off, final collection, senior repayment and withdrawal; and
 - distribution of the realized residual to junior.
@@ -84,7 +84,7 @@ complete $1 million warehouse:
 The integration tests separately verify:
 
 - a draw above the borrowing base reverts atomically;
-- an impairment freezes draws and sweeps until a senior paydown cures it;
+- an impairment freezes draws and origination funding while its cash sweep pays senior down;
 - pledged receivables cannot leave if that would undersecure senior;
 - run-off is one-way and junior remains structurally subordinated;
 - only the named operator and junior provider can move facility assets; and
