@@ -4,7 +4,7 @@ A focused proof of concept for financing a pool of tokenized receivables with ju
 senior loan originated through Morpho Midnight.
 
 The demonstration is intentionally one warehouse account, one receivable token, one Midnight market, one
-junior provider, and one use-of-proceeds account. It shows the structure and its flow of funds; it is not an
+junior provider, one senior commitment, a 21-day availability period, and one use-of-proceeds account. It shows the structure and its flow of funds; it is not an
 attempt to implement a generalized private-credit platform.
 
 > [!CAUTION]
@@ -59,7 +59,8 @@ book entries are the junior contribution and withdrawal totals used for reportin
 
 ## Lifecycle
 
-1. The administrator allows a receivable and assigns its oracle and advance rate.
+1. The administrator allows a receivable and assigns its oracle and advance rate. The warehouse pins those terms
+   when its Midnight market is configured; subsequent registry changes cannot loosen the active facility.
 2. Junior deposits the first-loss cash required to complete the receivable purchase.
 3. The operator transfers receivables into the warehouse and pledges them to Midnight.
 4. The warehouse takes a senior lender offer, subject to the borrowing-base cap.
@@ -69,7 +70,8 @@ book entries are the junior contribution and withdrawal totals used for reportin
 8. If the oracle mark or eligibility terms make debt exceed the borrowing base, anyone can flag a deficiency.
 9. A deficiency blocks new draws and origination funding. Anyone can call `sweepCollectionsToSenior` to apply
    all trapped cash to senior; added collateral, that paydown, or a recovered valuation can cure the facility.
-10. Run-off permanently blocks new draws, receivable deposits, and origination funding. The same cash sweep
+10. The availability end or market maturity blocks new money and lets anyone enter run-off. Run-off permanently
+    blocks new draws, receivable deposits, and origination funding. The same cash sweep
     repays senior first; junior can withdraw only after Midnight debt reaches zero.
 
 ## Tests

@@ -21,10 +21,12 @@ abstract contract WarehouseForkBase is Test {
     uint256 internal constant LLTV = 0.965e18;
     uint256 internal constant LIQUIDATION_CURSOR = 0.3e18;
     uint16 internal constant ADVANCE_RATE_BPS = 7_500;
+    uint256 internal constant AVAILABILITY_PERIOD = 21 days;
     uint256 internal constant TICK_SPACING = 4;
     uint256 internal constant APR = 0.05e18;
     uint128 internal constant POOL_FACE = 1_000_000e6;
     uint128 internal constant SENIOR_FACE = 750_000e6;
+    uint128 internal constant SENIOR_COMMITMENT = 800_000e6;
 
     address internal administrator = makeAddr("administrator");
     address internal operator = makeAddr("operator");
@@ -54,7 +56,15 @@ abstract contract WarehouseForkBase is Test {
         registry.setAsset(address(receivable), address(oracle), ADVANCE_RATE_BPS, true);
 
         warehouse = new WarehouseAccount(
-            address(MIDNIGHT), address(USDC), address(receivable), address(registry), operator, sponsor, originator
+            address(MIDNIGHT),
+            address(USDC),
+            address(receivable),
+            address(registry),
+            operator,
+            sponsor,
+            originator,
+            SENIOR_COMMITMENT,
+            block.timestamp + AVAILABILITY_PERIOD
         );
 
         maturity = block.timestamp + 30 days;

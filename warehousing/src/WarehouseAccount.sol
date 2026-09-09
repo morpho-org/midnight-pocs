@@ -2,6 +2,7 @@
 pragma solidity 0.8.34;
 
 import {IMidnight, Market, Offer} from "midnight/interfaces/IMidnight.sol";
+import {IOracle} from "midnight/interfaces/IOracle.sol";
 import {IdLib} from "midnight/libraries/IdLib.sol";
 import {SafeTransferLib} from "midnight/libraries/SafeTransferLib.sol";
 import {AssetRegistry} from "./AssetRegistry.sol";
@@ -16,6 +17,9 @@ interface IERC20Like {
 ///         Midnight draw, the operator deploys that cash, collections repay senior first, and junior receives
 ///         only the residual in run-off.
 contract WarehouseAccount {
+    uint256 internal constant BPS = 10_000;
+    uint256 internal constant ORACLE_PRICE_SCALE = 1e36;
+
     enum State {
         Active,
         Deficiency,
@@ -29,11 +33,16 @@ contract WarehouseAccount {
     address public immutable operator;
     address public immutable juniorProvider;
     address public immutable cashRecipient;
+    uint256 public immutable seniorCommitment;
+    uint256 public immutable availabilityEnd;
 
     State public state;
     bytes32 public activeMarketId;
     uint256 public collateralIndex;
     bool public marketConfigured;
+    address public facilityOracle;
+    uint16 public facilityAdvanceRateBps;
+    uint256 public marketMaturity;
     uint256 public juniorDeposited;
     uint256 public juniorWithdrawn;
 
@@ -63,6 +72,7 @@ contract WarehouseAccount {
     error FacilityDeficient();
     error FacilityNotDeficient();
     error SeniorOutstanding();
+    error SeniorCommitmentExceeded(uint256 seniorDebt, uint256 seniorCommitment);
     error BorrowingBaseExceeded(uint256 seniorDebt, uint256 borrowingBase);
 
     constructor(
@@ -72,13 +82,16 @@ contract WarehouseAccount {
         address _assetRegistry,
         address _operator,
         address _juniorProvider,
-        address _cashRecipient
+        address _cashRecipient,
+        uint256 _seniorCommitment,
+        uint256 _availabilityEnd
     ) {
         if (
             _midnight == address(0) || _loanToken == address(0) || _receivableToken == address(0)
                 || _assetRegistry == address(0) || _operator == address(0) || _juniorProvider == address(0)
                 || _cashRecipient == address(0)
         ) revert ZeroAddress();
+        if (_seniorCommitment == 0 || _availabilityEnd <= block.timestamp) revert InvalidState();
         if (
             _midnight.code.length == 0 || _loanToken.code.length == 0 || _receivableToken.code.length == 0
                 || _assetRegistry.code.length == 0
@@ -91,6 +104,8 @@ contract WarehouseAccount {
         operator = _operator;
         juniorProvider = _juniorProvider;
         cashRecipient = _cashRecipient;
+        seniorCommitment = _seniorCommitment;
+        availabilityEnd = _availabilityEnd;
 
         require(IERC20Like(_loanToken).approve(_midnight, type(uint256).max), "loan approval failed");
         require(IERC20Like(_receivableToken).approve(_midnight, type(uint256).max), "collateral approval failed");
@@ -107,7 +122,7 @@ contract WarehouseAccount {
     }
 
     modifier onlyActive() {
-        if (state != State.Active) revert InvalidState();
+        if (state != State.Active || facilityExpired()) revert InvalidState();
         _;
     }
 
@@ -124,7 +139,7 @@ contract WarehouseAccount {
 
     /// @notice Move newly originated, tokenized receivables into the SPV. Disabled only after run-off begins.
     function depositReceivables(uint256 amount) external onlyOperator {
-        if (state == State.RunOff) revert InvalidState();
+        if (state == State.RunOff || facilityExpired()) revert InvalidState();
         if (amount == 0) revert ZeroAmount();
         if (!assetRegistry.inRegistry(receivableToken)) revert InvalidMarket();
         SafeTransferLib.safeTransferFrom(receivableToken, msg.sender, address(this), amount);
@@ -133,13 +148,18 @@ contract WarehouseAccount {
 
     /// @notice Pledge receivables to one fixed Midnight market. This POC intentionally supports one market.
     function pledgeReceivables(Market calldata market, uint256 index, uint256 amount) external onlyOperator {
-        if (state == State.RunOff) revert InvalidState();
+        if (state == State.RunOff || facilityExpired()) revert InvalidState();
         if (amount == 0) revert ZeroAmount();
         bytes32 id = _validateMarket(market, index);
 
         if (!marketConfigured) {
+            (bool eligible, uint16 advanceRateBps, address oracle) = assetRegistry.registry(receivableToken);
+            if (!eligible || availabilityEnd > market.maturity) revert InvalidMarket();
             activeMarketId = id;
             collateralIndex = index;
+            facilityOracle = oracle;
+            facilityAdvanceRateBps = advanceRateBps;
+            marketMaturity = market.maturity;
             marketConfigured = true;
         } else if (id != activeMarketId || index != collateralIndex) {
             revert MarketAlreadyConfigured();
@@ -160,6 +180,8 @@ contract WarehouseAccount {
         returns (uint256 proceeds)
     {
         if (units == 0 || !offer.buy || !marketConfigured) revert InvalidOffer();
+        uint256 debtAfter = seniorDebt() + units;
+        if (debtAfter > seniorCommitment) revert SeniorCommitmentExceeded(debtAfter, seniorCommitment);
         _requireMarket(offer.market);
         _validateMarket(offer.market, collateralIndex);
         _requireCompliant();
@@ -174,6 +196,7 @@ contract WarehouseAccount {
     function fundOriginations(uint256 amount) external onlyOperator onlyActive {
         if (amount == 0) revert ZeroAmount();
         if (!marketConfigured) revert MarketNotConfigured();
+        if (!assetRegistry.inRegistry(receivableToken)) revert InvalidMarket();
         _requireCompliant();
         SafeTransferLib.safeTransfer(loanToken, cashRecipient, amount);
         emit OriginationsFunded(cashRecipient, amount);
@@ -198,7 +221,7 @@ contract WarehouseAccount {
     /// @dev Any cash above the outstanding face remains trapped because `fundOriginations` is Active-only and
     ///      junior cannot withdraw until run-off has begun and senior debt is zero.
     function sweepCollectionsToSenior(Market calldata market) external returns (uint256 units) {
-        if (state == State.Active) revert InvalidState();
+        if (state == State.Active && !facilityExpired()) revert InvalidState();
         _requireMarket(market);
 
         uint256 cash = cashBalance();
@@ -236,7 +259,7 @@ contract WarehouseAccount {
 
     // -------------------------------------------------------------------------- state and waterfall
 
-    /// @notice A public, objective test using the registry's current oracle price and advance rate.
+    /// @notice A public, objective test using the facility's pinned oracle and advance rate.
     function checkDeficiency() public view returns (bool) {
         return seniorDebt() > borrowingBase();
     }
@@ -251,12 +274,24 @@ contract WarehouseAccount {
     /// @notice Return to active operation after added collateral, a senior paydown, or a valuation recovery.
     function cureDeficiency() external onlyOperator {
         if (state != State.Deficiency) revert InvalidState();
+        if (facilityExpired()) revert InvalidState();
+        if (!assetRegistry.inRegistry(receivableToken)) revert InvalidMarket();
         if (checkDeficiency()) revert FacilityDeficient();
         _setState(State.Active);
     }
 
     /// @notice Permanently stop new draws and originations. Collections and senior repayment remain enabled.
     function enterRunOff() external onlyOperator {
+        _enterRunOff();
+    }
+
+    /// @notice Anyone can close the revolving period after the availability end or market maturity.
+    function enterExpiredRunOff() external {
+        if (!facilityExpired()) revert InvalidState();
+        _enterRunOff();
+    }
+
+    function _enterRunOff() internal {
         if (state == State.RunOff) revert InvalidState();
         _setState(State.RunOff);
     }
@@ -292,11 +327,14 @@ contract WarehouseAccount {
     }
 
     function collateralValue() public view returns (uint256) {
-        return assetRegistry.value(receivableToken, totalReceivables());
+        if (!marketConfigured) return assetRegistry.value(receivableToken, totalReceivables());
+        return totalReceivables() * IOracle(facilityOracle).price() / ORACLE_PRICE_SCALE;
     }
 
     function borrowingBase() public view returns (uint256) {
-        return assetRegistry.borrowingBase(receivableToken, pledgedReceivables());
+        if (!marketConfigured || !assetRegistry.inRegistry(receivableToken)) return 0;
+        uint256 pledgedValue = pledgedReceivables() * IOracle(facilityOracle).price() / ORACLE_PRICE_SCALE;
+        return pledgedValue * facilityAdvanceRateBps / BPS;
     }
 
     function seniorDebt() public view returns (uint256) {
@@ -312,7 +350,12 @@ contract WarehouseAccount {
     function availableToDraw() external view returns (uint256) {
         uint256 base = borrowingBase();
         uint256 debt = seniorDebt();
-        return base > debt ? base - debt : 0;
+        uint256 limit = base < seniorCommitment ? base : seniorCommitment;
+        return limit > debt ? limit - debt : 0;
+    }
+
+    function facilityExpired() public view returns (bool) {
+        return block.timestamp >= availabilityEnd || (marketConfigured && block.timestamp >= marketMaturity);
     }
 
     // -------------------------------------------------------------------------- internal validation
@@ -324,6 +367,10 @@ contract WarehouseAccount {
         ) revert InvalidMarket();
 
         (bool eligible, uint16 advanceRateBps, address oracle) = assetRegistry.registry(receivableToken);
+        if (marketConfigured) {
+            advanceRateBps = facilityAdvanceRateBps;
+            oracle = facilityOracle;
+        }
         if (
             !eligible || market.collateralParams[index].token != receivableToken
                 || market.collateralParams[index].oracle != oracle

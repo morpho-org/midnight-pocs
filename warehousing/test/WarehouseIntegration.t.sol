@@ -4,6 +4,7 @@ pragma solidity 0.8.34;
 import {Offer} from "midnight/interfaces/IMidnight.sol";
 import {WarehouseAccount} from "../src/WarehouseAccount.sol";
 import {WarehouseForkBase} from "./WarehouseForkBase.sol";
+import {MockReceivableOracle} from "./mocks/MockReceivable.sol";
 
 contract WarehouseIntegrationTest is WarehouseForkBase {
     function test_drawCannotExceedBorrowingBase() public {
@@ -25,6 +26,24 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
 
         assertEq(warehouse.seniorDebt(), 0, "reverted draw left debt");
         assertEq(warehouse.cashBalance(), 300_000e6, "reverted draw moved cash");
+    }
+
+    function test_drawCannotExceedSeniorCommitment() public {
+        uint128 oversizedPool = 2_000_000e6;
+        uint128 excessiveFace = SENIOR_COMMITMENT + 1;
+        _fundLender(excessiveFace);
+        _depositAndPledge(oversizedPool);
+
+        Offer memory offer = _offer(excessiveFace, keccak256("excessive commitment draw"));
+        bytes memory ratifierData = _ratify(offer);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                WarehouseAccount.SeniorCommitmentExceeded.selector, uint256(excessiveFace), uint256(SENIOR_COMMITMENT)
+            )
+        );
+        vm.prank(operator);
+        warehouse.borrow(offer, ratifierData, excessiveFace);
     }
 
     function test_impairmentFreezesNewMoneyAndSweepsCashToSeniorUntilCured() public {
@@ -167,6 +186,61 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
 
         assertEq(warehouse.seniorDebt(), 0, "asset removal trapped senior debt");
         assertEq(warehouse.totalReceivables(), 0, "asset removal trapped collateral");
+    }
+
+    function test_delistedAssetCannotResumeNewMoneyAfterSeniorIsRepaid() public {
+        _openWarehouse();
+
+        vm.prank(administrator);
+        registry.setAsset(address(receivable), address(oracle), ADVANCE_RATE_BPS, false);
+
+        deal(address(USDC), takeout, uint256(SENIOR_FACE) + 1, true);
+        vm.startPrank(takeout);
+        USDC.approve(address(warehouse), type(uint256).max);
+        warehouse.depositCollection(uint256(SENIOR_FACE) + 1);
+        vm.stopPrank();
+
+        vm.prank(operator);
+        warehouse.repaySenior(market, SENIOR_FACE);
+
+        vm.expectRevert(WarehouseAccount.InvalidMarket.selector);
+        vm.prank(operator);
+        warehouse.fundOriginations(1);
+    }
+
+    function test_facilityTermsStayPinnedWhenRegistryConfigurationChanges() public {
+        _openWarehouse();
+        MockReceivableOracle replacementOracle = new MockReceivableOracle(administrator, 2e36);
+
+        vm.prank(administrator);
+        registry.setAsset(address(receivable), address(replacementOracle), 9_000, true);
+
+        assertEq(warehouse.facilityOracle(), address(oracle), "facility oracle changed");
+        assertEq(warehouse.facilityAdvanceRateBps(), ADVANCE_RATE_BPS, "advance rate changed");
+        assertEq(warehouse.collateralValue(), POOL_FACE, "replacement oracle changed facility value");
+        assertEq(warehouse.borrowingBase(), SENIOR_FACE, "replacement terms changed borrowing base");
+    }
+
+    function test_expiryBlocksNewMoneyAndOpensPermissionlessRunOffAndSweep() public {
+        _openWarehouse();
+
+        deal(address(USDC), takeout, 1e6, true);
+        vm.startPrank(takeout);
+        USDC.approve(address(warehouse), 1e6);
+        warehouse.depositCollection(1e6);
+        vm.stopPrank();
+
+        vm.warp(warehouse.availabilityEnd());
+        assertTrue(warehouse.facilityExpired(), "facility did not expire");
+
+        vm.expectRevert(WarehouseAccount.InvalidState.selector);
+        vm.prank(operator);
+        warehouse.fundOriginations(1e6);
+
+        vm.prank(stranger);
+        warehouse.enterExpiredRunOff();
+        vm.prank(stranger);
+        assertEq(warehouse.sweepCollectionsToSenior(market), 1e6, "expired cash was not swept");
     }
 
     function test_onlyNamedPartiesCanMoveWarehouseAssets() public {
