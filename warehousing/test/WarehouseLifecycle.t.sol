@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.34;
 
+import {Offer} from "midnight/interfaces/IMidnight.sol";
 import {WarehouseAccount} from "../src/WarehouseAccount.sol";
 import {WarehouseForkBase} from "./WarehouseForkBase.sol";
 
@@ -20,12 +21,13 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         assertEq(warehouse.equity(), uint256(POOL_FACE) - SENIOR_FACE, "junior cushion is wrong");
         assertEq(openingProceeds + junior, POOL_FACE, "sources do not equal uses");
 
-        // ------------------------------------------------------------ partial collection and recycling
-        // A $400k receivable settles. Its 75% senior share pays debt down, and the $100k equity share funds
-        // a replacement receivable. Senior face and the borrowing base both fall by $300k.
+        // ------------------------------------------------------------ season, settle, and replenish the pool
+        // Ten days into the line, a $400k batch settles. Its 75% senior share pays debt down. The warehouse then
+        // adds a $400k replacement batch, redraws $300k of senior face, and adds only the discount shortfall as
+        // sponsor equity. Pool size and target leverage are restored rather than merely shrinking the facility.
+        vm.warp(block.timestamp + 10 days);
         uint256 settled = 400_000e6;
-        uint256 seniorPaydown = 300_000e6;
-        uint256 recycled = 100_000e6;
+        uint128 seniorPaydown = 300_000e6;
 
         deal(address(USDC), takeout, settled, true);
         vm.prank(takeout);
@@ -35,48 +37,63 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         warehouse.settleReceivables(market, takeout, settled, seniorPaydown, settled, takeout);
         receivable.burn(takeout, settled);
 
-        _depositAndPledge(recycled);
-        vm.prank(operator);
-        warehouse.fundOriginations(recycled);
+        _depositAndPledge(settled);
 
-        assertEq(warehouse.totalReceivables(), 700_000e6, "recycled pool balance is wrong");
-        assertEq(warehouse.borrowingBase(), 525_000e6, "recycled borrowing base is wrong");
-        assertEq(warehouse.seniorDebt(), 450_000e6, "partial senior paydown is wrong");
-        assertEq(warehouse.cashBalance(), 0, "recycling left idle cash");
-        assertEq(USDC.balanceOf(originator), 1_100_000e6, "replacement origination not funded");
-        assertFalse(warehouse.checkDeficiency(), "healthy recycled pool marked deficient");
-
-        // ------------------------------------------------------------ run-off and senior-first waterfall
+        deal(address(USDC), lender, USDC.balanceOf(lender) + 400_000e6, true);
+        Offer memory replenishmentOffer = _offer(seniorPaydown, keccak256("replenishment draw"));
+        bytes memory replenishmentRatifierData = _ratify(replenishmentOffer);
+        uint256 replenishmentProceeds = _expectedProceeds(seniorPaydown);
         vm.prank(operator);
-        warehouse.enterRunOff();
+        warehouse.borrow(replenishmentOffer, replenishmentRatifierData, seniorPaydown, replenishmentProceeds);
+
+        uint256 retainedEquityCash = settled - seniorPaydown;
+        uint256 replacementJunior = settled - retainedEquityCash - replenishmentProceeds;
+        _depositJunior(replacementJunior);
+        vm.prank(operator);
+        warehouse.fundOriginations(settled);
+
+        assertEq(warehouse.totalReceivables(), POOL_FACE, "replenished pool balance is wrong");
+        assertEq(warehouse.borrowingBase(), SENIOR_FACE, "target advance rate was not restored");
+        assertEq(warehouse.seniorDebt(), SENIOR_FACE, "target senior leverage was not restored");
+        assertEq(warehouse.seniorClaim(), SENIOR_FACE, "senior claim did not track the redraw");
+        assertEq(warehouse.cashBalance(), 0, "replenishment left idle cash");
+        assertEq(USDC.balanceOf(originator), 1_400_000e6, "replacement origination not funded");
+        assertFalse(warehouse.checkDeficiency(), "healthy replenished pool marked deficient");
+
+        // ------------------------------------------------------------ day-21 takeout and senior-first waterfall
+        // The pool sells for $900k, realizing a $100k loss. The takeout buyer receives the actual receivable token;
+        // senior receives its full $750k face, leaving only $150k for sponsor equity.
+        vm.warp(warehouse.availabilityEnd());
+        vm.prank(stranger);
+        warehouse.enterExpiredRunOff();
         assertEq(uint256(warehouse.state()), uint256(WarehouseAccount.State.RunOff), "run-off not entered");
 
-        uint256 remainingReceivables = 700_000e6;
-        uint256 finalCollections = 770_000e6; // par plus a $70k portfolio gain
+        uint256 finalCollections = 900_000e6;
         deal(address(USDC), takeout, finalCollections, true);
         vm.prank(takeout);
         USDC.approve(address(warehouse), finalCollections);
 
         vm.prank(operator);
-        warehouse.settleReceivables(market, takeout, finalCollections, 450_000e6, remainingReceivables, takeout);
+        warehouse.settleReceivables(market, takeout, finalCollections, SENIOR_FACE, POOL_FACE, takeout);
 
-        // The lender withdraws the repaid face from Midnight. It earns the discount between its opening cash
-        // advance and the $750k face; no warehouse accounting entry manufactures that return.
+        // The lender withdraws both funded senior batches from Midnight. It earns the discounts between its cash
+        // advances and their face; no warehouse accounting entry manufactures that return.
         uint256 lenderBeforeWithdraw = USDC.balanceOf(lender);
+        uint256 totalSeniorFunded = uint256(SENIOR_FACE) + seniorPaydown;
         vm.prank(lender);
-        MIDNIGHT.withdraw(market, SENIOR_FACE, lender, lender);
-        assertEq(USDC.balanceOf(lender) - lenderBeforeWithdraw, SENIOR_FACE, "senior face not returned");
+        MIDNIGHT.withdraw(market, totalSeniorFunded, lender, lender);
+        assertEq(USDC.balanceOf(lender) - lenderBeforeWithdraw, totalSeniorFunded, "senior face not returned");
 
-        uint256 juniorResidual = finalCollections - 450_000e6;
+        uint256 juniorResidual = finalCollections - uint256(SENIOR_FACE);
         vm.prank(sponsor);
         warehouse.withdrawJuniorResidual(juniorResidual, sponsor);
 
         assertEq(warehouse.seniorDebt(), 0, "senior not fully repaid");
+        assertEq(warehouse.seniorClaim(), 0, "senior claim remains after repayment");
         assertEq(warehouse.totalReceivables(), 0, "receivables remain after settlement");
-        assertEq(receivable.balanceOf(takeout), remainingReceivables, "takeout did not receive the pool");
+        assertEq(receivable.balanceOf(takeout), POOL_FACE, "takeout did not receive the pool");
         assertEq(warehouse.cashBalance(), 0, "cash remains after waterfall");
         assertEq(USDC.balanceOf(sponsor), juniorResidual, "junior did not receive residual");
-        assertGt(juniorResidual, junior, "junior did not receive the portfolio upside");
-        assertGt(USDC.balanceOf(lender), uint256(SENIOR_FACE) + 100_000e6, "senior carry not realized");
+        assertLt(juniorResidual, junior + replacementJunior, "sponsor did not absorb the portfolio loss");
     }
 }

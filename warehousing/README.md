@@ -75,7 +75,7 @@ book entries are the junior contribution and withdrawal totals used for reportin
    distributions until cash pays that loss or the fixed senior beneficiary explicitly resolves it.
 10. The availability end or market maturity blocks new money and lets anyone enter run-off. Run-off permanently
     blocks new draws, receivable deposits, and origination funding. The same cash sweep
-    repays senior first; junior can withdraw only after Midnight debt reaches zero.
+    repays senior first; junior can withdraw only after both Midnight debt and the preserved senior claim reach zero.
 
 ## Tests
 
@@ -84,14 +84,19 @@ complete $1 million warehouse:
 
 - junior and senior funding;
 - initial receivable purchase and origination funding;
-- partial collection, proportional senior paydown, and cash recycling;
-- run-off, final collection, senior repayment and withdrawal; and
-- distribution of the realized residual to junior.
+- a seasoned partial collection followed by full-size replenishment and an incremental senior draw;
+- expiry of the 21-day availability period and permissionless run-off;
+- a below-par takeout in which the buyer receives the actual receivable pool; and
+- full senior repayment before the sponsor absorbs the realized loss.
 
 The integration tests separately verify:
 
 - a draw above the borrowing base reverts atomically;
 - an impairment freezes draws and origination funding while its cash sweep pays senior down;
+- expiry automatically closes new money and opens run-off and the cash sweep to anyone;
+- liquidation or bad-debt realization cannot erase the senior claim or unlock junior cash;
+- registry changes cannot rewrite the active facility's pinned oracle and advance rate;
+- the senior commitment, minimum draw proceeds, and single-borrower market gate are enforced;
 - pledged receivables cannot leave if that would undersecure senior;
 - unpledged receivables neither support a draw nor become stranded in run-off;
 - run-off is one-way and junior remains structurally subordinated;

@@ -107,6 +107,7 @@ contract WarehouseAccount {
                 || _assetRegistry == address(0) || _operator == address(0) || _juniorProvider == address(0)
                 || _cashRecipient == address(0)
         ) revert ZeroAddress();
+        // forge-lint: disable-next-line(block-timestamp) Facility boundaries intentionally use timestamp terms.
         if (_seniorCommitment == 0 || _availabilityEnd <= block.timestamp) revert InvalidState();
         if (
             _midnight.code.length == 0 || _loanToken.code.length == 0 || _receivableToken.code.length == 0
@@ -436,6 +437,7 @@ contract WarehouseAccount {
     }
 
     function facilityExpired() public view returns (bool) {
+        // forge-lint: disable-next-line(block-timestamp) Facility boundaries intentionally use timestamp terms.
         return block.timestamp >= availabilityEnd || (marketConfigured && block.timestamp >= marketMaturity);
     }
 
