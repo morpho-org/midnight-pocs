@@ -27,6 +27,7 @@ contract AssetRegistry {
     error InvalidAdvanceRate();
     error InvalidOracle();
     error AssetNotConfigured();
+    error AssetTermsLocked();
 
     constructor(address _operator) {
         if (_operator == address(0)) revert ZeroAddress();
@@ -43,6 +44,11 @@ contract AssetRegistry {
         if (asset == address(0)) revert ZeroAddress();
         if (advanceRateBps > BPS) revert InvalidAdvanceRate();
         if (eligible && (oracle == address(0) || oracle.code.length == 0)) revert InvalidOracle();
+
+        AssetConfig memory current = registry[asset];
+        if (current.oracle != address(0) && (oracle != current.oracle || advanceRateBps != current.advanceRateBps)) {
+            revert AssetTermsLocked();
+        }
 
         registry[asset] = AssetConfig({eligible: eligible, advanceRateBps: advanceRateBps, oracle: oracle});
         emit AssetConfigured(asset, oracle, advanceRateBps, eligible);

@@ -64,6 +64,7 @@ abstract contract WarehouseForkBase is Test {
             operator,
             sponsor,
             originator,
+            lender,
             SENIOR_COMMITMENT,
             block.timestamp + AVAILABILITY_PERIOD
         );
@@ -157,8 +158,7 @@ abstract contract WarehouseForkBase is Test {
         receivable.mint(operator, amount);
         vm.startPrank(operator);
         receivable.approve(address(warehouse), amount);
-        warehouse.depositReceivables(amount);
-        warehouse.pledgeReceivables(market, 0, amount);
+        warehouse.depositAndPledgeReceivables(market, 0, amount);
         vm.stopPrank();
     }
 

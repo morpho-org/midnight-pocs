@@ -2,9 +2,9 @@
 pragma solidity 0.8.34;
 
 import {IMidnight, Offer} from "midnight/interfaces/IMidnight.sol";
+import {AssetRegistry} from "../src/AssetRegistry.sol";
 import {WarehouseAccount} from "../src/WarehouseAccount.sol";
 import {WarehouseForkBase} from "./WarehouseForkBase.sol";
-import {MockReceivableOracle} from "./mocks/MockReceivable.sol";
 
 contract WarehouseIntegrationTest is WarehouseForkBase {
     function test_drawCannotExceedBorrowingBase() public {
@@ -102,6 +102,9 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
 
     function test_receivablesCannotLeaveIfRemainingPoolWouldUndersecureSenior() public {
         _openWarehouse();
+        deal(address(USDC), takeout, 1, true);
+        vm.prank(takeout);
+        USDC.approve(address(warehouse), 1);
 
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -109,7 +112,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
             )
         );
         vm.prank(operator);
-        warehouse.releaseReceivables(market, 1, originator);
+        warehouse.settleReceivables(market, takeout, 1, 0, 1);
 
         assertEq(warehouse.totalReceivables(), POOL_FACE, "reverted release moved collateral");
         assertEq(MIDNIGHT.collateral(marketId, address(warehouse), 0), POOL_FACE, "pledge changed on revert");
@@ -122,8 +125,8 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         receivable.mint(operator, POOL_FACE);
         vm.startPrank(operator);
         receivable.approve(address(warehouse), POOL_FACE);
-        warehouse.depositReceivables(POOL_FACE);
-        warehouse.pledgeReceivables(market, 0, 800_000e6);
+        warehouse.depositAndPledgeReceivables(market, 0, 800_000e6);
+        assertTrue(receivable.transfer(address(warehouse), 200_000e6));
         vm.stopPrank();
 
         assertEq(warehouse.totalReceivables(), POOL_FACE, "total pool is wrong");
@@ -143,8 +146,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
 
         vm.startPrank(operator);
         warehouse.enterRunOff();
-        warehouse.releaseUnpledgedReceivables(200_000e6, address(this));
-        warehouse.releaseReceivables(market, 800_000e6, address(this));
+        warehouse.releaseResidualReceivables(market, address(this));
         vm.stopPrank();
 
         assertEq(warehouse.totalReceivables(), 0, "run-off stranded receivables");
@@ -167,7 +169,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
 
         vm.expectRevert(WarehouseAccount.InvalidState.selector);
         vm.prank(operator);
-        warehouse.depositReceivables(1);
+        warehouse.depositAndPledgeReceivables(market, 0, 1);
 
         _depositJunior(1);
         vm.expectRevert(WarehouseAccount.SeniorOutstanding.selector);
@@ -197,7 +199,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         vm.startPrank(operator);
         warehouse.sweepCollectionsToSenior(market);
         warehouse.enterRunOff();
-        warehouse.releaseReceivables(market, POOL_FACE, address(this));
+        warehouse.releaseResidualReceivables(market, address(this));
         vm.stopPrank();
 
         assertEq(warehouse.seniorDebt(), 0, "asset removal trapped senior debt");
@@ -209,14 +211,13 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         _depositJunior(SENIOR_FACE);
 
         vm.prank(operator);
-        warehouse.repaySenior(market, SENIOR_FACE);
+        warehouse.enterRunOff();
+        warehouse.sweepCollectionsToSenior(market);
         vm.prank(administrator);
         oracle.setShouldRevert(true);
 
-        vm.startPrank(operator);
-        warehouse.enterRunOff();
-        warehouse.releaseReceivables(market, POOL_FACE, address(this));
-        vm.stopPrank();
+        vm.prank(operator);
+        warehouse.releaseResidualReceivables(market, address(this));
 
         assertEq(warehouse.totalReceivables(), 0, "failed oracle stranded collateral");
     }
@@ -228,26 +229,26 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         registry.setAsset(address(receivable), address(oracle), ADVANCE_RATE_BPS, false);
 
         _depositJunior(uint256(SENIOR_FACE) + 1);
+        warehouse.flagDeficiency();
+        warehouse.sweepCollectionsToSenior(market);
 
+        vm.expectRevert(WarehouseAccount.InvalidState.selector);
         vm.prank(operator);
-        warehouse.repaySenior(market, SENIOR_FACE);
+        warehouse.fundOriginations(1);
 
         vm.expectRevert(WarehouseAccount.InvalidMarket.selector);
         vm.prank(operator);
-        warehouse.fundOriginations(1);
+        warehouse.cureDeficiency();
     }
 
-    function test_facilityTermsStayPinnedWhenRegistryConfigurationChanges() public {
+    function test_registryTermsCannotChangeAfterConfiguration() public {
         _openWarehouse();
-        MockReceivableOracle replacementOracle = new MockReceivableOracle(administrator, 2e36);
 
+        vm.expectRevert(AssetRegistry.AssetTermsLocked.selector);
         vm.prank(administrator);
-        registry.setAsset(address(receivable), address(replacementOracle), 9_000, true);
+        registry.setAsset(address(receivable), address(oracle), 9_000, true);
 
-        assertEq(warehouse.facilityOracle(), address(oracle), "facility oracle changed");
-        assertEq(warehouse.facilityAdvanceRateBps(), ADVANCE_RATE_BPS, "advance rate changed");
-        assertEq(warehouse.collateralValue(), POOL_FACE, "replacement oracle changed facility value");
-        assertEq(warehouse.borrowingBase(), SENIOR_FACE, "replacement terms changed borrowing base");
+        assertEq(warehouse.borrowingBase(), SENIOR_FACE, "locked terms changed borrowing base");
     }
 
     function test_expiryBlocksNewMoneyAndOpensPermissionlessRunOffAndSweep() public {
@@ -263,7 +264,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         warehouse.fundOriginations(1e6);
 
         vm.prank(stranger);
-        warehouse.enterExpiredRunOff();
+        warehouse.enterRunOff();
         vm.prank(stranger);
         assertEq(warehouse.sweepCollectionsToSenior(market), 1e6, "expired cash was not swept");
     }
@@ -277,14 +278,11 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         MIDNIGHT.liquidate(market, 0, 0, 0, address(warehouse), false, address(this), address(0), "");
 
         assertEq(warehouse.seniorDebt(), 0, "Midnight debt was not written down");
-        uint256 realizedLossFactor = MIDNIGHT.lossFactor(marketId);
-        assertGt(realizedLossFactor, 0, "Midnight did not record a loss");
-        assertTrue(warehouse.hasUnacknowledgedSeniorLoss(), "facility forgot the senior loss");
+        assertGt(MIDNIGHT.lossFactor(marketId), 0, "Midnight did not record a loss");
+        assertTrue(warehouse.seniorLossRealized(), "facility forgot the senior loss");
         assertTrue(warehouse.checkDeficiency(), "senior loss did not freeze the facility");
 
-        vm.expectRevert(
-            abi.encodeWithSelector(WarehouseAccount.UnresolvedSeniorLoss.selector, uint256(0), realizedLossFactor)
-        );
+        vm.expectRevert(WarehouseAccount.SeniorLossRealized.selector);
         vm.prank(operator);
         warehouse.fundOriginations(1);
 
@@ -293,13 +291,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         vm.expectRevert(WarehouseAccount.SeniorOutstanding.selector);
         vm.prank(sponsor);
         warehouse.withdrawJuniorResidual(1, sponsor);
-
-        vm.prank(lender);
-        warehouse.acknowledgeSeniorLoss();
-        assertFalse(warehouse.hasUnacknowledgedSeniorLoss(), "lender resolution did not clear the loss");
-
-        vm.prank(sponsor);
-        warehouse.withdrawJuniorResidual(100_000e6, sponsor);
+        assertEq(warehouse.cashBalance(), 100_000e6, "realized loss released trapped cash");
     }
 
     function test_cashBackedLiquidationIsNotMisclassifiedAsSeniorLoss() public {
@@ -316,7 +308,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
 
         assertEq(warehouse.seniorDebt(), uint256(SENIOR_FACE) - repaidUnits, "liquidation repayment is wrong");
         assertEq(MIDNIGHT.lossFactor(marketId), lossFactorBefore, "cash repayment changed loss factor");
-        assertFalse(warehouse.hasUnacknowledgedSeniorLoss(), "cash repayment was classified as a loss");
+        assertFalse(warehouse.seniorLossRealized(), "cash repayment was classified as a loss");
         assertTrue(warehouse.canIncreaseCredit(lender), "fixed lender was rejected");
         assertFalse(warehouse.canIncreaseCredit(stranger), "lender credit remained transferable");
     }
@@ -352,7 +344,7 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
 
         vm.expectRevert(WarehouseAccount.OnlyOperator.selector);
         vm.prank(stranger);
-        warehouse.releaseReceivables(market, 1, stranger);
+        warehouse.releaseResidualReceivables(market, stranger);
 
         assertEq(warehouse.cashBalance(), 100e6, "unauthorized call moved junior cash");
         assertEq(warehouse.totalReceivables(), 100e6, "unauthorized call moved receivables");

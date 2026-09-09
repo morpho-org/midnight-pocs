@@ -11,14 +11,11 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         // ------------------------------------------------------------ close and fund the warehouse
         (uint256 openingProceeds, uint256 junior) = _openWarehouse();
 
-        assertEq(warehouse.juniorDeposited(), junior, "junior commitment not recorded");
         assertEq(warehouse.totalReceivables(), POOL_FACE, "receivables not held by SPV");
-        assertEq(warehouse.collateralValue(), POOL_FACE, "collateral not valued at par");
         assertEq(warehouse.borrowingBase(), SENIOR_FACE, "advance rate not applied");
         assertEq(warehouse.seniorDebt(), SENIOR_FACE, "senior debt face is wrong");
         assertEq(warehouse.cashBalance(), 0, "purchase cash not swept");
         assertEq(USDC.balanceOf(originator), POOL_FACE, "originator not paid in full");
-        assertEq(warehouse.equity(), uint256(POOL_FACE) - SENIOR_FACE, "junior cushion is wrong");
         assertEq(openingProceeds + junior, POOL_FACE, "sources do not equal uses");
 
         // ------------------------------------------------------------ season, settle, and replenish the pool
@@ -34,7 +31,7 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         USDC.approve(address(warehouse), settled);
 
         vm.prank(operator);
-        warehouse.settleReceivables(market, servicer, settled, seniorPaydown, settled, servicer);
+        warehouse.settleReceivables(market, servicer, settled, seniorPaydown, settled);
         receivable.burn(servicer, settled);
 
         _depositAndPledge(settled);
@@ -64,7 +61,7 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         // senior receives its full $750k face, leaving only $150k for sponsor equity.
         vm.warp(warehouse.availabilityEnd());
         vm.prank(stranger);
-        warehouse.enterExpiredRunOff();
+        warehouse.enterRunOff();
         assertEq(uint256(warehouse.state()), uint256(WarehouseAccount.State.RunOff), "run-off not entered");
 
         uint256 finalCollections = 900_000e6;
@@ -73,7 +70,7 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         USDC.approve(address(warehouse), finalCollections);
 
         vm.prank(operator);
-        warehouse.settleReceivables(market, takeout, finalCollections, SENIOR_FACE, POOL_FACE, takeout);
+        warehouse.settleReceivables(market, takeout, finalCollections, SENIOR_FACE, POOL_FACE);
 
         // The lender withdraws both funded senior batches from Midnight. It earns the discounts between its cash
         // advances and their face; no warehouse accounting entry manufactures that return.
@@ -88,7 +85,7 @@ contract WarehouseLifecycleTest is WarehouseForkBase {
         warehouse.withdrawJuniorResidual(juniorResidual, sponsor);
 
         assertEq(warehouse.seniorDebt(), 0, "senior not fully repaid");
-        assertFalse(warehouse.hasUnacknowledgedSeniorLoss(), "senior loss remains after repayment");
+        assertFalse(warehouse.seniorLossRealized(), "senior loss remains after repayment");
         assertEq(warehouse.totalReceivables(), 0, "receivables remain after settlement");
         assertEq(receivable.balanceOf(takeout), POOL_FACE, "takeout did not receive the pool");
         assertEq(warehouse.cashBalance(), 0, "cash remains after waterfall");
