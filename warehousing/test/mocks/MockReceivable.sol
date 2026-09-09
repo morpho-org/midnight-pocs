@@ -54,15 +54,26 @@ contract MockReceivable {
 /// @notice Mutable valuation lets tests demonstrate a borrowing-base deficiency and its cure.
 contract MockReceivableOracle {
     address public immutable administrator;
-    uint256 public price;
+    uint256 internal storedPrice;
+    bool public shouldRevert;
 
     constructor(address _administrator, uint256 _price) {
         administrator = _administrator;
-        price = _price;
+        storedPrice = _price;
     }
 
     function setPrice(uint256 newPrice) external {
         require(msg.sender == administrator, "only administrator");
-        price = newPrice;
+        storedPrice = newPrice;
+    }
+
+    function setShouldRevert(bool newShouldRevert) external {
+        require(msg.sender == administrator, "only administrator");
+        shouldRevert = newShouldRevert;
+    }
+
+    function price() external view returns (uint256) {
+        require(!shouldRevert, "oracle unavailable");
+        return storedPrice;
     }
 }

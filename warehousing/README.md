@@ -96,6 +96,7 @@ The integration tests separately verify:
 - expiry automatically closes new money and opens run-off and the cash sweep to anyone;
 - liquidation or bad-debt realization cannot erase the senior claim or unlock junior cash;
 - registry changes cannot rewrite the active facility's pinned oracle and advance rate;
+- a failed oracle cannot strand collateral after the preserved senior claim is fully satisfied;
 - the senior commitment, minimum draw proceeds, and single-borrower market gate are enforced;
 - pledged receivables cannot leave if that would undersecure senior;
 - unpledged receivables neither support a draw nor become stranded in run-off;

@@ -204,6 +204,23 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         assertEq(warehouse.totalReceivables(), 0, "asset removal trapped collateral");
     }
 
+    function test_failedOracleCannotStrandCollateralAfterSeniorIsSatisfied() public {
+        _openWarehouse();
+        _depositJunior(SENIOR_FACE);
+
+        vm.prank(operator);
+        warehouse.repaySenior(market, SENIOR_FACE);
+        vm.prank(administrator);
+        oracle.setShouldRevert(true);
+
+        vm.startPrank(operator);
+        warehouse.enterRunOff();
+        warehouse.releaseReceivables(market, POOL_FACE, address(this));
+        vm.stopPrank();
+
+        assertEq(warehouse.totalReceivables(), 0, "failed oracle stranded collateral");
+    }
+
     function test_delistedAssetCannotResumeNewMoneyAfterSeniorIsRepaid() public {
         _openWarehouse();
 

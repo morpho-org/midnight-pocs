@@ -338,7 +338,8 @@ contract WarehouseAccount {
     /// @notice A public, objective test using the facility's pinned oracle and advance rate.
     function checkDeficiency() public view returns (bool) {
         uint256 debt = seniorDebt();
-        return debt > borrowingBase() || seniorClaim != debt;
+        if (seniorClaim != debt) return true;
+        return debt != 0 && debt > borrowingBase();
     }
 
     /// @notice Anyone can freeze new draws and outward cash sweeps once the borrowing base is breached.
@@ -481,6 +482,7 @@ contract WarehouseAccount {
     function _requireCompliant() internal view {
         uint256 debt = seniorDebt();
         if (seniorClaim != debt) revert UnresolvedSeniorLoss(seniorClaim, debt);
+        if (debt == 0) return;
         uint256 base = borrowingBase();
         if (debt > base) revert BorrowingBaseExceeded(debt, base);
     }
