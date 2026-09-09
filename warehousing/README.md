@@ -71,6 +71,8 @@ book entries are the junior contribution and withdrawal totals used for reportin
 8. If the oracle mark or eligibility terms make debt exceed the borrowing base, anyone can flag a deficiency.
 9. A deficiency blocks new draws and origination funding. Anyone can call `sweepCollectionsToSenior` to apply
    all trapped cash to senior; added collateral, that paydown, or a recovered valuation can cure the facility.
+   If Midnight realizes bad debt, the facility preserves the unpaid senior claim and blocks junior or originator
+   distributions until cash pays that loss or the fixed senior beneficiary explicitly resolves it.
 10. The availability end or market maturity blocks new money and lets anyone enter run-off. Run-off permanently
     blocks new draws, receivable deposits, and origination funding. The same cash sweep
     repays senior first; junior can withdraw only after Midnight debt reaches zero.

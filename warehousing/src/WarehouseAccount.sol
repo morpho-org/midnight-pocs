@@ -43,6 +43,8 @@ contract WarehouseAccount {
     address public facilityOracle;
     uint16 public facilityAdvanceRateBps;
     uint256 public marketMaturity;
+    address public seniorBeneficiary;
+    uint256 public seniorClaim;
     uint256 public juniorDeposited;
     uint256 public juniorWithdrawn;
 
@@ -60,6 +62,8 @@ contract WarehouseAccount {
         uint256 receivableAmount
     );
     event SeniorRepaid(bytes32 indexed marketId, uint256 units);
+    event SeniorLossPaid(address indexed beneficiary, uint256 amount);
+    event SeniorLossWaived(address indexed beneficiary, uint256 amount);
     event CollectionsSweptToSenior(bytes32 indexed marketId, uint256 units);
     event ReceivablesReleased(address indexed recipient, uint256 amount);
     event UnpledgedReceivablesReleased(address indexed recipient, uint256 amount);
@@ -68,6 +72,7 @@ contract WarehouseAccount {
 
     error OnlyOperator();
     error OnlyJuniorProvider();
+    error OnlySeniorBeneficiary();
     error ZeroAddress();
     error ZeroAmount();
     error InvalidContract();
@@ -80,6 +85,8 @@ contract WarehouseAccount {
     error FacilityDeficient();
     error FacilityNotDeficient();
     error SeniorOutstanding();
+    error UnresolvedSeniorLoss(uint256 seniorClaim, uint256 seniorDebt);
+    error InvalidSeniorLossAmount();
     error SeniorCommitmentExceeded(uint256 seniorDebt, uint256 seniorCommitment);
     error InsufficientProceeds(uint256 proceeds, uint256 minimumProceeds);
     error BorrowingBaseExceeded(uint256 seniorDebt, uint256 borrowingBase);
@@ -189,6 +196,7 @@ contract WarehouseAccount {
         returns (uint256 proceeds)
     {
         if (units == 0 || !offer.buy || !marketConfigured) revert InvalidOffer();
+        if (seniorBeneficiary != address(0) && offer.maker != seniorBeneficiary) revert InvalidOffer();
         uint256 debtAfter = seniorDebt() + units;
         if (debtAfter > seniorCommitment) revert SeniorCommitmentExceeded(debtAfter, seniorCommitment);
         _requireMarket(offer.market);
@@ -197,6 +205,8 @@ contract WarehouseAccount {
 
         (, proceeds) = midnight.take(offer, ratifierData, units, address(this), address(this), address(0), "");
         if (proceeds < minProceeds) revert InsufficientProceeds(proceeds, minProceeds);
+        if (seniorBeneficiary == address(0)) seniorBeneficiary = offer.maker;
+        seniorClaim += units;
         _requireCompliant();
 
         emit SeniorDrawn(activeMarketId, units, proceeds);
@@ -240,6 +250,7 @@ contract WarehouseAccount {
 
         if (seniorRepayment > 0) {
             midnight.repay(market, seniorRepayment, address(this), address(0), "");
+            seniorClaim -= seniorRepayment;
             emit SeniorRepaid(activeMarketId, seniorRepayment);
         }
 
@@ -256,6 +267,7 @@ contract WarehouseAccount {
         if (units == 0) revert ZeroAmount();
         _requireMarket(market);
         midnight.repay(market, units, address(this), address(0), "");
+        seniorClaim -= units;
         emit SeniorRepaid(activeMarketId, units);
     }
 
@@ -272,7 +284,28 @@ contract WarehouseAccount {
         if (units == 0) revert ZeroAmount();
 
         midnight.repay(market, units, address(this), address(0), "");
+        seniorClaim -= units;
         emit CollectionsSweptToSenior(activeMarketId, units);
+    }
+
+    /// @notice Apply trapped warehouse cash directly to a claim that Midnight wrote down during liquidation.
+    function paySeniorLoss(uint256 amount) external {
+        uint256 loss = unresolvedSeniorLoss();
+        if (amount == 0 || amount > loss) revert InvalidSeniorLossAmount();
+
+        seniorClaim -= amount;
+        SafeTransferLib.safeTransfer(loanToken, seniorBeneficiary, amount);
+        emit SeniorLossPaid(seniorBeneficiary, amount);
+    }
+
+    /// @notice Let the fixed senior beneficiary acknowledge an externally settled or waived liquidation loss.
+    function waiveSeniorLossClaim(uint256 amount) external {
+        if (msg.sender != seniorBeneficiary) revert OnlySeniorBeneficiary();
+        uint256 loss = unresolvedSeniorLoss();
+        if (amount == 0 || amount > loss) revert InvalidSeniorLossAmount();
+
+        seniorClaim -= amount;
+        emit SeniorLossWaived(msg.sender, amount);
     }
 
     /// @notice Release settled receivables only when the remaining pool still supports all senior debt.
@@ -291,7 +324,7 @@ contract WarehouseAccount {
     /// @notice Recover receivables that were deposited but never pledged once the facility is fully run off.
     function releaseUnpledgedReceivables(uint256 amount, address recipient) external onlyOperator {
         if (state != State.RunOff) revert InvalidState();
-        if (seniorDebt() != 0) revert SeniorOutstanding();
+        if (seniorClaim != 0) revert SeniorOutstanding();
         if (amount == 0) revert ZeroAmount();
         if (recipient == address(0)) revert ZeroAddress();
 
@@ -303,7 +336,8 @@ contract WarehouseAccount {
 
     /// @notice A public, objective test using the facility's pinned oracle and advance rate.
     function checkDeficiency() public view returns (bool) {
-        return seniorDebt() > borrowingBase();
+        uint256 debt = seniorDebt();
+        return debt > borrowingBase() || seniorClaim != debt;
     }
 
     /// @notice Anyone can freeze new draws and outward cash sweeps once the borrowing base is breached.
@@ -341,7 +375,7 @@ contract WarehouseAccount {
     /// @notice Junior receives cash only after the facility is in run-off and the senior debt is zero.
     function withdrawJuniorResidual(uint256 amount, address recipient) external onlyJuniorProvider {
         if (state != State.RunOff) revert InvalidState();
-        if (seniorDebt() != 0) revert SeniorOutstanding();
+        if (seniorClaim != 0) revert SeniorOutstanding();
         if (amount == 0) revert ZeroAmount();
         if (recipient == address(0)) revert ZeroAddress();
 
@@ -383,13 +417,18 @@ contract WarehouseAccount {
         return marketConfigured ? midnight.debt(activeMarketId, address(this)) : 0;
     }
 
+    function unresolvedSeniorLoss() public view returns (uint256) {
+        uint256 debt = seniorDebt();
+        return seniorClaim > debt ? seniorClaim - debt : 0;
+    }
+
     function equity() external view returns (uint256) {
         uint256 assets = cashBalance() + collateralValue();
-        uint256 debt = seniorDebt();
-        return assets > debt ? assets - debt : 0;
+        return assets > seniorClaim ? assets - seniorClaim : 0;
     }
 
     function availableToDraw() external view returns (uint256) {
+        if (facilityExpired() || seniorClaim != seniorDebt()) return 0;
         uint256 base = borrowingBase();
         uint256 debt = seniorDebt();
         uint256 limit = base < seniorCommitment ? base : seniorCommitment;
@@ -429,6 +468,7 @@ contract WarehouseAccount {
 
     function _requireCompliant() internal view {
         uint256 debt = seniorDebt();
+        if (seniorClaim != debt) revert UnresolvedSeniorLoss(seniorClaim, debt);
         uint256 base = borrowingBase();
         if (debt > base) revert BorrowingBaseExceeded(debt, base);
     }

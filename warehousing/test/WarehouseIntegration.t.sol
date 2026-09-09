@@ -251,6 +251,41 @@ contract WarehouseIntegrationTest is WarehouseForkBase {
         assertEq(warehouse.sweepCollectionsToSenior(market), 1e6, "expired cash was not swept");
     }
 
+    function test_midnightBadDebtCannotBypassSeniorPriority() public {
+        _openWarehouse();
+        _depositJunior(100_000e6);
+
+        vm.prank(administrator);
+        oracle.setPrice(0);
+        MIDNIGHT.liquidate(market, 0, 0, 0, address(warehouse), false, address(this), address(0), "");
+
+        assertEq(warehouse.seniorDebt(), 0, "Midnight debt was not written down");
+        assertEq(warehouse.seniorClaim(), SENIOR_FACE, "facility forgot the senior claim");
+        assertEq(warehouse.unresolvedSeniorLoss(), SENIOR_FACE, "senior loss is wrong");
+        assertTrue(warehouse.checkDeficiency(), "senior loss did not freeze the facility");
+
+        vm.expectRevert(
+            abi.encodeWithSelector(WarehouseAccount.UnresolvedSeniorLoss.selector, uint256(SENIOR_FACE), uint256(0))
+        );
+        vm.prank(operator);
+        warehouse.fundOriginations(1);
+
+        vm.prank(operator);
+        warehouse.enterRunOff();
+        vm.expectRevert(WarehouseAccount.SeniorOutstanding.selector);
+        vm.prank(sponsor);
+        warehouse.withdrawJuniorResidual(1, sponsor);
+
+        uint256 lenderBefore = USDC.balanceOf(lender);
+        vm.prank(stranger);
+        warehouse.paySeniorLoss(100_000e6);
+        assertEq(USDC.balanceOf(lender) - lenderBefore, 100_000e6, "trapped cash did not pay senior");
+
+        vm.prank(lender);
+        warehouse.waiveSeniorLossClaim(650_000e6);
+        assertEq(warehouse.seniorClaim(), 0, "lender resolution did not clear the claim");
+    }
+
     function test_onlyNamedPartiesCanMoveWarehouseAssets() public {
         _depositJunior(100e6);
         _depositAndPledge(100e6);
